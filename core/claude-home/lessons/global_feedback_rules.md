@@ -1224,7 +1224,7 @@ reading-reflector 在《全城公测，就我开了双号》cluster_001 抓到�
 
 **How to apply**：
 - **核心区分**：作者风格档 = **笔法**第一权威（句长/段长/voice/signature/调性）；选定灵感卡 = **故事内容**唯一来源（题材/世界观/人物/情节/走向）。风格档里的人名/地名/情节示例 = 笔法演示样本·**禁止当故事搬**。
-- 已修 `core/scripts/gen_creative.py build_volume_arc_prompt`：system prompt 顶部加「🔴 故事内容 vs 笔法权威分离」段 + 铁律 4 改写。回归锁 `tests/test_gen_creative_volume_arc.py::test_volume_arc_story_content_from_card_not_style_ref`。
+- 权威分离铁律现落在 `.claude/agents/novel-outline-planner.md` 的 MODE=volume_arc_unit 合约段（「🔴🔴 故事内容 vs 笔法 的权威分离」·卷级大纲由该 agent 亲笔）。回归锁 `tests/test_gen_creative_volume_arc.py::test_agent_contract_story_content_authority_separation`。
 - 修后重跑验证：volume_arc 正确产出钟楼弃儿（伊莱/霍华德/艾米·雾都·钟楼·遗嘱）✅。
 - **残留**：诡秘之主 skill_FINAL.md 仍含沙盒天道污染（蒸馏时该产纯笔法不嵌新书骨架）。prompt 修复已系统性挡住污染·但根治需清风格档示例故事(per-style·distill 时别嵌具体故事)。
 - **通用教训**：任何「风格档/示例」注入创作 prompt 时·必须明确「示例只学形式不抄内容」·否则弱模型偷懒抄示例。这是模型偷懒/遗漏的典型——拿现成示例顶替真实创作。

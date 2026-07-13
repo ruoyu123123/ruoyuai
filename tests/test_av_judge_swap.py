@@ -4,8 +4,8 @@
 
 纪律（与 test_av_judge_selfconsist 同款 · 北极星①⑤⑥）：
   · 只测**确定性逻辑**（prompt 层 swap / schema 不变性 / swap 分配 / 聚合透明字段 / 报告平铺 /
-    intent_recovery 确定性余弦 + 序列化稳定性 + multi-ref 变异带）。
-  · LLM 调用**全 mock**（mock call_gen_model · 签名 mock(loader, system, user, tag='')·不实跑 gen-model）。
+    intent_recovery 确定性余弦 + 序列化稳定性 + multi-ref 变异带）——av_judge 是纯确定性库
+    （swap 分配消费方是 distill_av_verify 投票任务渲染 · 判别由 novel-av-judge agent 完成）。
   · mstyle 真余弦需 sentence-transformers + EMBED_BACKEND=mstyle → 用 hash 后端测「invalid 护栏」路径
     （绝不 hash 冒充语义），真 mstyle 路径标 skipif（无依赖跳过）。
   · 零回归硬纪律：swap_on=off → 全 swap=False·N=1 恒不 swap·intent_dim 默认关 4 维。
@@ -13,7 +13,6 @@
 覆盖：
   [S] build_av_judge_prompt swap：顺序反转 / schema 不变 / verdict 锚到仿写段 / 标签先后。
   [SW] _swap_assignment + _position_swap_on env：分配序列 / N=1 / env 解析。
-  [SC] self_consistency_judge 半数 swap：mock 捕获 swap 配比 / _swapped 标记 / 默认零回归。
   [AG] aggregate_verdicts swap 透明：n_swapped_samples / sample_drift_detail / 语义方向一致性。
   [RP] build_report 平铺 swap 透明字段（advisory 不黑箱）。
   [IR] intent_recovery：_flatten_principles 稳定性 / hash 后端 invalid 护栏 / 变异带 / 探针 advisory。
@@ -29,31 +28,6 @@ sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import av_judge as av  # noqa: E402
 
 _DIM_NAMES = ["词汇选择", "句法", "话语连接词", "语用语气"]
-
-
-# ════════════════════════════════════════════════════════════════
-# mock 基础设施（复用 test_av_judge_selfconsist 范式 · 签名 mock(loader, system, user, tag='')）
-# ════════════════════════════════════════════════════════════════
-
-class _P:
-    def __init__(self, name="active", model="m", temperature=0.8):
-        self.name = name
-        self.model = model
-        self.temperature = temperature
-        self.max_tokens = None
-        self.api_key = "sk-test"
-        self.base_url = "http://localhost/v1"
-
-
-class _Loader:
-    def __init__(self, profiles):
-        self._profiles = profiles
-
-    def get_callable_profiles(self):
-        return self._profiles
-
-    def get_active_profile(self):
-        return self._profiles[0]
 
 
 def _reply(verdicts):
@@ -192,123 +166,6 @@ def test_SW_env_off_values():
             assert _reload_swap(v)._position_swap_on() is False, v
         finally:
             _reload_swap(None)
-
-
-# ════════════════════════════════════════════════════════════════
-# [SC] self_consistency_judge 半数 swap（mock 捕获 swap 配比 · _swapped 标记 · 默认零回归）
-# ════════════════════════════════════════════════════════════════
-
-def _run_sc_capture_prompts(n_samples, swap_on):
-    """跑 self_consistency_judge，捕获每次 call_gen_model 收到的 user prompt（判 swap 方向）+ agg。"""
-    seen_prompts = []
-
-    def mock(loader, system, user, tag=""):
-        seen_prompts.append(user)
-        return _reply({}), _P(), 0.1
-
-    orig = av.call_gen_model
-    av.call_gen_model = mock
-    try:
-        agg = av.self_consistency_judge(_Loader([_P()]), "AUTHOR_ANCHOR", "REPLICA_PROBE",
-                                        n_samples=n_samples, swap_on=swap_on)
-    finally:
-        av.call_gen_model = orig
-    return seen_prompts, agg
-
-
-def _is_swapped_prompt(prompt):
-    """判一个 prompt 是否 swap 向（仿写文本块在作者文本块之前）。"""
-    return prompt.index("REPLICA_PROBE") < prompt.index("AUTHOR_ANCHOR")
-
-
-def test_SC_n4_half_swap_2off_2on():
-    """n=4 swap_on → build_av_judge_prompt 被 swap=False 调 2 次 / swap=True 调 2 次（R3 断言）。"""
-    prompts, agg = _run_sc_capture_prompts(4, swap_on=True)
-    assert len(prompts) == 4
-    swapped = [_is_swapped_prompt(p) for p in prompts]
-    assert swapped == [False, False, True, True]
-    assert agg["n_swapped_samples"] == 2
-
-
-def test_SC_n1_single_prompt_no_swap():
-    """n=1 → 只构 1 次 prompt 且原向（零回归 · 与 test_D_n1 行为一致 · R3 断言）。"""
-    prompts, agg = _run_sc_capture_prompts(1, swap_on=True)
-    assert len(prompts) == 1
-    assert _is_swapped_prompt(prompts[0]) is False
-    assert agg["n_swapped_samples"] == 0
-
-
-def test_SC_n3_assignment_FFT():
-    """n=3 swap_on → swap 分配 [False, False, True]（R3 断言）。"""
-    prompts, _ = _run_sc_capture_prompts(3, swap_on=True)
-    assert [_is_swapped_prompt(p) for p in prompts] == [False, False, True]
-
-
-def test_SC_each_sample_carries_swapped_flag():
-    """每个 sample dict 带 _swapped 标志且与分配一致（R3 断言）。"""
-    seen = []
-
-    def mock(loader, system, user, tag=""):
-        seen.append(user)
-        return _reply({}), _P(), 0.1
-
-    orig = av.call_gen_model
-    av.call_gen_model = mock
-    try:
-        agg = av.self_consistency_judge(_Loader([_P()]), "AUTHOR_ANCHOR", "REPLICA_PROBE",
-                                        n_samples=4, swap_on=True)
-    finally:
-        av.call_gen_model = orig
-    detail = agg["sample_drift_detail"]
-    assert [d["swapped"] for d in detail] == [False, False, True, True]
-
-
-def test_SC_default_swap_off_zero_regression():
-    """swap_on=None 且 env 未设 → 全原向（零回归 · 默认 active 行为不变）。"""
-    g = _reload_swap(None)
-    try:
-        seen = []
-
-        def mock(loader, system, user, tag=""):
-            seen.append(user)
-            return _reply({}), _P(), 0.1
-
-        orig = g.call_gen_model
-        g.call_gen_model = mock
-        try:
-            agg = g.self_consistency_judge(_Loader([_P()]), "AUTHOR_ANCHOR", "REPLICA_PROBE",
-                                           n_samples=3)  # swap_on 缺省 → 读 env（off）
-        finally:
-            g.call_gen_model = orig
-        assert all(not _is_swapped_prompt(p) for p in seen)
-        assert agg["n_swapped_samples"] == 0
-    finally:
-        _reload_swap(None)
-
-
-def test_SC_swap_on_only_two_prompts_built():
-    """swap_on 时即便 N=4，distinct prompt 只两种（缓存复用省 token · 不每次重构）。"""
-    prompts, _ = _run_sc_capture_prompts(4, swap_on=True)
-    # 4 次调用但 distinct prompt 只 2 个（swap-off 一种 / swap-on 一种 · 缓存命中）
-    assert len(set(prompts)) == 2
-
-
-def test_SC_intent_dim_threaded_into_prompt():
-    """include_intent_dim=True 透传 → 每次 call_gen_model 收到的 prompt 含「作者思维」第 5 维。"""
-    seen = []
-
-    def mock(loader, system, user, tag=""):
-        seen.append(user)
-        return _reply({}), _P(), 0.1
-
-    orig = av.call_gen_model
-    av.call_gen_model = mock
-    try:
-        av.self_consistency_judge(_Loader([_P()]), "A", "B", n_samples=2,
-                                  swap_on=False, include_intent_dim=True)
-    finally:
-        av.call_gen_model = orig
-    assert all("作者思维" in p for p in seen)
 
 
 # ════════════════════════════════════════════════════════════════

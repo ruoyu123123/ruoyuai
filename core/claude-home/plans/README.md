@@ -21,7 +21,7 @@
 | `steps[].judge_report_path_secondary` | 双载体落盘（如 voice-checker 的 brief 内嵌一份 judge_report 平铺） | |
 | `steps[].agent_executor: "script"` | 创意 wrapper（novel-writer / splitter）非 judge——工作由 `scripts[]` 完成，主代理不派 judge（北极星④章节仅格式） | |
 | `steps[].data_flow` | `<angle>` 占位符回填声明：主代理跑脚本前按行从 source_json 取值填占位符（lazy 按行解析，同 step 内前一行脚本产物喂后一行）；`join_range` 把 `[lo,hi]` 拼 `"lo-hi"`；只回填路径/数值不固化创作内容（北极星②③） | `{"<chapter_range_dash>": {"source_json": "_数据库/.wal/splitter_...json", "field": "chapter_range", "join_range": true}}` |
-| `steps[].control_flow.exit_codes` | 退出码→动作（`ok` / `fail` / `dispatch:<agent>`）；如 audit_hub：0=pass / 1=auto_fixed / 2=needs_agent→主代理派单 / 3=fatal | |
+| `steps[].control_flow.exit_codes` | 退出码→动作（`ok` / `fail` / `dispatch:<agent>` / `pending_*`=主代理按 manifest/brief 补 agent 产物后重跑同 step 脚本）；如 audit_hub：0=pass / 1=auto_fixed / 2=needs_agent→主代理派单 / 3=fatal；如 gen_chapter_titles --apply：2=pending_titles→spawn novel-titler 补件/重命名后重跑 --apply | |
 | `steps[].control_flow.round_loop` | ROUND 循环（连续 N 轮 clean 才通过；超 max_rounds 仍未 clean 即 hard_stop）——只表达控制流不编码创作决策 | |
 | `steps[].pause_for_user` | 停顿点（choice/integer + source/options_field/answer_artifact）；主代理弹卡给用户选，**默认必弹**（北极星③）；用户「全自动」时才取第一候选 | |
 | `steps[].after_pause_scripts` | 用户选择落定后的确定性后续（如 `cluster_choice_apply` 把选中 brief 机械写回 事件簇.json） | |

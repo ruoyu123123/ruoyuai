@@ -168,17 +168,13 @@ def test_audit_hub_integrates_scanner():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_has_real_embedding_backend_false_by_default():
-    """未配置 EMBED_BACKEND / GEN_EMBED__* → False（默认 hash 袋·无真语义）。"""
+    """未配置 EMBED_BACKEND → False（默认 hash 袋·无真语义）。"""
     old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
     try:
         assert mod._has_real_embedding_backend() is False
     finally:
         if old_eb is not None:
             os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
 
 
 def test_has_real_embedding_backend_false_when_hash():
@@ -206,24 +202,11 @@ def test_has_real_embedding_backend_true_when_embed_backend_set():
             os.environ.pop("EMBED_BACKEND", None)
 
 
-def test_has_real_embedding_backend_true_when_gen_embed_env_set():
-    old_eb = os.environ.pop("EMBED_BACKEND", None)
-    try:
-        os.environ["GEN_EMBED__test__API_KEY"] = "fake"
-        assert mod._has_real_embedding_backend() is True
-    finally:
-        os.environ.pop("GEN_EMBED__test__API_KEY", None)
-        if old_eb is not None:
-            os.environ["EMBED_BACKEND"] = old_eb
-
-
 def test_default_match_method_is_char_jaccard_and_scores_unchanged():
     """🔴 零回归锁：无真 embedding 后端（默认）→ match_method=char_jaccard，field_scores
     与直接调用 _coverage() 逐字节一致（语义路径是"加"上去的，不是"换"掉字面路径）。"""
     bak_mode = os.environ.get("AGENDA_DRIFT_MODE")
     bak_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
     try:
         _set_mode("active")
         fields = {"want": "救妹妹", "antagonist": "无脸者",
@@ -239,8 +222,6 @@ def test_default_match_method_is_char_jaccard_and_scores_unchanged():
         _set_mode(bak_mode)
         if bak_eb is not None:
             os.environ["EMBED_BACKEND"] = bak_eb
-        for k, v in saved.items():
-            os.environ[k] = v
 
 
 def test_semantic_path_replaces_jaccard_for_synonym():
@@ -345,9 +326,6 @@ def test_prefetch_not_called_without_real_backend(monkeypatch):
     import embedding_store
     monkeypatch.setenv("AGENDA_DRIFT_MODE", "active")
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    for k in list(os.environ):
-        if k.startswith("GEN_EMBED__"):
-            monkeypatch.delenv(k, raising=False)
     calls = []
 
     def _rec_prefetch(texts):

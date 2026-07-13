@@ -342,7 +342,8 @@ def effect_threshold(pooled_std, *, probe_noise_floor=DEFAULT_PROBE_NOISE_FLOOR,
 
     · 表层维（确定性 SFS · 无判别位置偏）：probe_noise_floor=0 → 门 = k × 1σ_seed。
     · 思维维（av_judge 探针度量）：探针自身不稳（mean_agreement<1）→ probe_noise_floor=
-      1−mean_agreement（见 av_judge.probe_noise_floor）。此时门取**两者大者**——
+      1−mean_agreement（mean_agreement 取自 av_judge.aggregate_verdicts 输出·调用方换算）。
+      此时门取**两者大者**——
       探针物理噪声地板与 seed 抖动门哪个高用哪个（分栏不同门限·绝不同一 1σ 通吃）。
     """
     return max(float(k) * float(pooled_std or 0.0), float(probe_noise_floor or 0.0))

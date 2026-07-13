@@ -1,6 +1,6 @@
 {
   "command": "distill-style",
-  "version": 6,
+  "version": 7,
   "description": "作者风格蒸馏 10 步流水线：作品预处理、cluster 切分、48 维表层分析、聚合 skill、同栈复刻、SFS 对比、修正反思、定稿与回灌验证。",
   "total_steps": 10,
   "required_steps": [1, 2, 2.5, 3, 4, 5, 5.5, 6, 6.5, 7],
@@ -38,29 +38,47 @@
     {
       "n": 2.5,
       "name": "skill-v0-generate",
-      "description": "首版 skill v0（distill_reflect 无 gap → 从作者档提炼笔法签名·破 chicken-egg：复刻需 skill_v0）。",
+      "description": "首版 skill v0：novel-skill-author MODE=draft 从作者档亲笔提炼笔法签名（无 gap·破 chicken-egg：复刻需 skill_v0）→ gen_creative --verify 确定性小节验收（五必备小节+≥200 字）；验收不过 exit 2 = 重 spawn 重写。",
       "required": true,
       "skip_output_allowed": false,
+      "must_spawn_agent": "novel-skill-author",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "MODE": "draft",
+        "AUTHOR_PROFILE_PATH": "{project_root}/作者风格.json",
+        "SKILL_VERSION": "0",
+        "OUTPUT_PATH": "{project_root}/skill_v0.md"
+      },
+      "judge_report_path": "skill_v0.md",
       "scripts": [
-        "python core/scripts/gen_creative.py --mode distill_reflect --project {project_root} --skill-version 0 --out {project_root}/skill_v0.md"
+        "python core/scripts/gen_creative.py --mode distill_reflect --verify --skill {project_root}/skill_v0.md"
       ],
+      "control_flow": {"exit_codes": {"0": "ok", "2": "skill_rejected_respawn_author"}},
       "expected_outputs": ["skill_v0.md"]
     },
     {
       "n": 3,
       "name": "phase-4-cluster-replica",
-      "description": "首轮同栈复刻：novel-replica-writer 按 skill_v0 写 cluster 场景草稿，distill_replicate 用 gemini 分段润色，随后 required 运行 AV advisory 验证。",
+      "description": "首轮同栈复刻：novel-replica-writer 按 skill_v0 写 cluster 场景草稿，distill_replicate 用 gemini 分段润色；随后 distill_av_verify 两段式 AV 验收——首跑渲染投票任务 manifest 后 exit 2=pending，主代理按 manifest spawn novel-av-judge 逐票判别，重跑做严格验收 + 多数票聚合落 advisory 报告。",
       "required": true,
       "skip_output_allowed": false,
-      "must_spawn_agent": "novel-replica-writer",
+      "must_spawn_agent": ["novel-replica-writer", "novel-av-judge"],
       "agent_input": {
-        "PROJECT": "{project_root}",
-        "CLUSTER_ID": "<first_cluster_id>",
-        "MODE": "style-replica-draft",
-        "STYLE_SKILL_PATH": "{project_root}/skill_v0.md",
-        "SCENES_DIR": "{project_root}/复刻测试/v0/claude_scenes"
+        "novel-replica-writer": {
+          "PROJECT": "{project_root}",
+          "CLUSTER_ID": "<first_cluster_id>",
+          "MODE": "style-replica-draft",
+          "STYLE_SKILL_PATH": "{project_root}/skill_v0.md",
+          "SCENES_DIR": "{project_root}/复刻测试/v0/claude_scenes"
+        },
+        "novel-av-judge": {
+          "JOBS_MANIFEST_PATH": "{project_root}/对比报告/av_v0_jobs/av_judge_jobs.json"
+        }
       },
-      "judge_report_path": "复刻测试/v0/claude_scenes/agent_report.json",
+      "judge_report_path": {
+        "novel-replica-writer": "复刻测试/v0/claude_scenes/agent_report.json",
+        "novel-av-judge": "对比报告/av_v0_jobs/agent_receipt.json"
+      },
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
@@ -68,7 +86,8 @@
         "python core/scripts/distill_replicate.py --style-skill {project_root}/skill_v0.md --mode cluster --cluster-ref <first_cluster_id> --project {project_root} --claude-scenes-dir {project_root}/复刻测试/v0/claude_scenes --output {project_root}/复刻测试/v0/replica.txt",
         "python core/scripts/distill_av_verify.py --project {project_root} --cluster-id <first_cluster_id> --replica {project_root}/复刻测试/v0/replica.txt --output {project_root}/对比报告/av_v0.json"
       ],
-      "expected_outputs": ["复刻测试/v0/claude_scenes/agent_report.json", "复刻测试/v0/replica.txt", "对比报告/av_v0.json"]
+      "control_flow": {"exit_codes": {"0": "ok", "2": "pending_av_jobs"}},
+      "expected_outputs": ["复刻测试/v0/claude_scenes/agent_report.json", "复刻测试/v0/replica.txt", "对比报告/av_v0_jobs/av_judge_jobs.json", "对比报告/av_v0_jobs/agent_receipt.json", "对比报告/av_v0.json"]
     },
     {
       "n": 4,
@@ -84,30 +103,50 @@
     {
       "n": 5,
       "name": "phase-3-correction-reflect",
-      "description": "修正反思（distill_reflect 有 gap → 基于 SFS 差距精化 skill v1·轻 gen-model 非 judge）。",
+      "description": "修正反思：novel-skill-author MODE=draft 读 SFS 差距报告亲笔精化 skill v1（只攻差距维度·其余段落保持稳定）→ gen_creative --verify 确定性小节验收（五必备小节+≥200 字）；验收不过 exit 2 = 重 spawn 重写。",
       "required": true,
       "_doc_c01": "🔴 2026-06-27 C01：skip_output_allowed true→false。reflect 产 skill_v1 是收敛环（step5.5）的必备输入·不产 v1 则无 v0→v1 严格优于判定·收敛闸退化为单遍。skill_v1.md 必须真落盘。",
       "skip_output_allowed": false,
+      "must_spawn_agent": "novel-skill-author",
+      "agent_input": {
+        "PROJECT": "{project_root}",
+        "MODE": "draft",
+        "AUTHOR_PROFILE_PATH": "{project_root}/作者风格.json",
+        "GAP_REPORT_PATH": "{project_root}/对比报告/eval_v0.json",
+        "CURRENT_SKILL_PATH": "{project_root}/skill_v0.md",
+        "SKILL_VERSION": "1",
+        "OUTPUT_PATH": "{project_root}/skill_v1.md"
+      },
+      "judge_report_path": "skill_v1.md",
       "scripts": [
-        "python core/scripts/gen_creative.py --mode distill_reflect --project {project_root} --gap-report {project_root}/对比报告/eval_v0.json --current-skill {project_root}/skill_v0.md --skill-version 1 --out {project_root}/skill_v1.md"
+        "python core/scripts/gen_creative.py --mode distill_reflect --verify --skill {project_root}/skill_v1.md"
       ],
+      "control_flow": {"exit_codes": {"0": "ok", "2": "skill_rejected_respawn_author"}},
       "expected_outputs": ["skill_v1.md"]
     },
     {
       "n": 5.5,
       "name": "phase-4b-v1-reverify-converge",
-      "description": "v1 同栈复刻与收敛闸：专用 writer 产独立场景稿，gemini 润色后跑 AV 与多参考 SFS；严格优于才选 v1，否则保留 v0，并写出选中 skill 与对应评估。",
+      "description": "v1 同栈复刻与收敛闸：专用 writer 产独立场景稿，gemini 润色后 distill_av_verify 两段式 AV 验收（首跑 exit 2=pending → spawn novel-av-judge 逐票判别 → 重跑聚合落报告），再跑多参考 SFS；严格优于才选 v1，否则保留 v0，并写出选中 skill 与对应评估。",
       "required": true,
       "skip_output_allowed": false,
-      "must_spawn_agent": "novel-replica-writer",
+      "must_spawn_agent": ["novel-replica-writer", "novel-av-judge"],
       "agent_input": {
-        "PROJECT": "{project_root}",
-        "CLUSTER_ID": "<first_cluster_id>",
-        "MODE": "style-replica-draft",
-        "STYLE_SKILL_PATH": "{project_root}/skill_v1.md",
-        "SCENES_DIR": "{project_root}/复刻测试/v1/claude_scenes"
+        "novel-replica-writer": {
+          "PROJECT": "{project_root}",
+          "CLUSTER_ID": "<first_cluster_id>",
+          "MODE": "style-replica-draft",
+          "STYLE_SKILL_PATH": "{project_root}/skill_v1.md",
+          "SCENES_DIR": "{project_root}/复刻测试/v1/claude_scenes"
+        },
+        "novel-av-judge": {
+          "JOBS_MANIFEST_PATH": "{project_root}/对比报告/av_v1_jobs/av_judge_jobs.json"
+        }
       },
-      "judge_report_path": "复刻测试/v1/claude_scenes/agent_report.json",
+      "judge_report_path": {
+        "novel-replica-writer": "复刻测试/v1/claude_scenes/agent_report.json",
+        "novel-av-judge": "对比报告/av_v1_jobs/agent_receipt.json"
+      },
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
@@ -117,7 +156,8 @@
         "python core/scripts/style_evaluator.py --gen {project_root}/复刻测试/v1/replica.txt --multi-ref-from-dir {project_root}/原文 --multi-ref-count 5 --output {project_root}/对比报告/eval_v1.json",
         "python core/scripts/distill_convergence_gate.py --before-eval {project_root}/对比报告/eval_v0.json --after-eval {project_root}/对比报告/eval_v1.json --skill-before {project_root}/skill_v0.md --skill-after {project_root}/skill_v1.md --ship-out {project_root}/skill_v2.md --ship-sfs-out {project_root}/对比报告/eval_ship.json"
       ],
-      "expected_outputs": ["复刻测试/v1/claude_scenes/agent_report.json", "复刻测试/v1/replica.txt", "对比报告/av_v1.json", "对比报告/eval_v1.json", "skill_v2.md", "对比报告/eval_ship.json"]
+      "control_flow": {"exit_codes": {"0": "ok", "2": "pending_av_jobs"}},
+      "expected_outputs": ["复刻测试/v1/claude_scenes/agent_report.json", "复刻测试/v1/replica.txt", "对比报告/av_v1_jobs/av_judge_jobs.json", "对比报告/av_v1_jobs/agent_receipt.json", "对比报告/av_v1.json", "对比报告/eval_v1.json", "skill_v2.md", "对比报告/eval_ship.json"]
     },
     {
       "n": 6,
@@ -146,18 +186,26 @@
     {
       "n": 7,
       "name": "phase-6-writer-feedback-verify",
-      "description": "写作端回灌验证闸：Claude 场景稿经 gemini 分段润色后，先跑确定性 arc/SFS 严格验证，再 required 跑 AV-judge 作者辨识度配对判别。AV 走味只报 advisory；输入、模型调用或报告落盘失败会阻断 required 步骤。",
+      "description": "写作端回灌验证闸：Claude 场景稿经 gemini 分段润色后，先跑确定性 arc/SFS 严格验证，再 required 跑 distill_av_verify 两段式 AV 验收（首跑 exit 2=pending → spawn novel-av-judge 逐票判别 → 重跑严格验收 + 多数票聚合落报告）。AV 走味只报 advisory；输入、判别补件或报告落盘缺失会阻断 required 步骤。",
       "required": true,
       "skip_output_allowed": false,
-      "must_spawn_agent": "novel-replica-writer",
+      "must_spawn_agent": ["novel-replica-writer", "novel-av-judge"],
       "agent_input": {
-        "PROJECT": "{project_root}",
-        "CLUSTER_ID": "<first_cluster_id>",
-        "MODE": "style-replica-draft",
-        "STYLE_SKILL_PATH": "{project_root}/skill_FINAL.md",
-        "SCENES_DIR": "{project_root}/复刻测试/writer_feedback_verify/claude_scenes"
+        "novel-replica-writer": {
+          "PROJECT": "{project_root}",
+          "CLUSTER_ID": "<first_cluster_id>",
+          "MODE": "style-replica-draft",
+          "STYLE_SKILL_PATH": "{project_root}/skill_FINAL.md",
+          "SCENES_DIR": "{project_root}/复刻测试/writer_feedback_verify/claude_scenes"
+        },
+        "novel-av-judge": {
+          "JOBS_MANIFEST_PATH": "{project_root}/对比报告/verify_av_jobs/av_judge_jobs.json"
+        }
       },
-      "judge_report_path": "复刻测试/writer_feedback_verify/claude_scenes/agent_report.json",
+      "judge_report_path": {
+        "novel-replica-writer": "复刻测试/writer_feedback_verify/claude_scenes/agent_report.json",
+        "novel-av-judge": "对比报告/verify_av_jobs/agent_receipt.json"
+      },
       "data_flow": {
         "<first_cluster_id>": {"source_json": "cluster_index.json", "field": "clusters.0.cluster_id", "optional": true, "default": "cluster_001"}
       },
@@ -165,8 +213,8 @@
         "python core/scripts/distill_finalize_verify.py --project {project_root} --skill {project_root}/skill_FINAL.md --cluster-id <first_cluster_id> --claude-scenes-dir {project_root}/复刻测试/writer_feedback_verify/claude_scenes --output {project_root}/对比报告/verify.json --strict",
         "python core/scripts/distill_av_verify.py --project {project_root} --cluster-id <first_cluster_id> --replica {project_root}/复刻测试/writer_feedback_verify/<first_cluster_id>_replica.txt --output {project_root}/对比报告/verify_av.json"
       ],
-      "control_flow": {"exit_codes": {"0": "ok", "2": "fail"}},
-      "expected_outputs": ["复刻测试/writer_feedback_verify/claude_scenes/agent_report.json", "对比报告/verify.json", "对比报告/verify_av.json"]
+      "control_flow": {"exit_codes": {"0": "ok", "2": "pending_av_jobs"}},
+      "expected_outputs": ["复刻测试/writer_feedback_verify/claude_scenes/agent_report.json", "对比报告/verify.json", "对比报告/verify_av_jobs/av_judge_jobs.json", "对比报告/verify_av_jobs/agent_receipt.json", "对比报告/verify_av.json"]
     }
   ],
   "_v2_principle": "整个系统为故事块服务·蒸馏以 cluster 为单位·48 维 judge 全章全文注入·复刻先于 SFS。",

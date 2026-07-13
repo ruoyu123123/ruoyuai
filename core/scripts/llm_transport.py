@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """llm_transport.py — 统一 LLM transport 层
 
-gen_writer / gen_creative / distill_replicate 等脚本共用的单一 LLM 调用模块。
+gen_writer / distill_replicate 等润色链脚本共用的单一 LLM 调用模块。
 
 统一处理：
 1. 双协议分发：profile.protocol == 'gemini' → 原生 streamGenerateContent SSE

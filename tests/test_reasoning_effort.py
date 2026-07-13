@@ -7,7 +7,7 @@ reasoning_effort。全链路统一「thinking_level OR reasoning_effort 都算 r
 覆盖：
 1. Profile 解析 reasoning_effort（真实调 loader·tmp .env）—— 防解析漂移
 2. extra_body 注入逻辑（thinking_level/reasoning_effort 独立共存）—— 直接测单一真理源 gen_model_loader.reasoning_extra_body
-3. reasoning 检测（thinking_level OR reasoning_effort）—— 锁 distill_replicate draft-refine auto-off 语义
+3. reasoning 检测（thinking_level OR reasoning_effort）—— 锁 distill_finalize_verify.resolve_strict_estimable_idx 的 reasoning 判定语义
 
 零依赖范式：文件尾 __main__ 循环跑 test_* 打 [OK]/[FAIL]。
 """
@@ -67,8 +67,8 @@ def test_neither_for_non_reasoning_profile():
 
 
 # ============ 2. extra_body 注入逻辑（单一真理源 reasoning_extra_body）============
-# 直接测真实代码。8 处 openai-path 调用（llm_transport/gen_writer/distill_replicate/
-# av_judge/gen_creative/gen_fixer/gen_chapter_titles/gen_negatives）全用此。
+# 直接测真实代码。openai-path 调用（llm_transport/gen_writer/distill_replicate/
+# av_judge/gen_fixer）全用此。
 _extra_body = gml.reasoning_extra_body
 
 
@@ -99,14 +99,14 @@ def test_extra_body_both_coexist():
         "thinking_level": "LOW", "reasoning_effort": "low"}
 
 
-# ============ 3. reasoning 检测（复现 distill_replicate draft-refine auto-off）============
+# ============ 3. reasoning 检测（复现 distill_finalize_verify.resolve_strict_estimable_idx）============
 def _is_reasoning(profile):
     """复现 reasoning 模型检测：thinking_level OR reasoning_effort 都算 reasoning。"""
     return bool(getattr(profile, "thinking_level", None) or getattr(profile, "reasoning_effort", None))
 
 
 def test_is_reasoning_via_reasoning_effort():
-    """🔴 关键：elysiver(reasoning_effort)必须被识别为 reasoning（否则 draft-refine 不 auto-off）。"""
+    """🔴 关键：elysiver(reasoning_effort)必须被识别为 reasoning（否则出货回灌 strict 维校准失真）。"""
     assert _is_reasoning(_profile(reasoning_effort="low")) is True
 
 

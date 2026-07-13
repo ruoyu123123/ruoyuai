@@ -3,7 +3,6 @@
 """
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -25,27 +24,18 @@ def test_default_backend_is_hash():
 
 def test_compute_embedding_degrades_on_failure():
     """后端抛异常 → hash 兜底（永不崩）。"""
-    es._BACKEND = ("api:x", 1024, lambda t: (_ for _ in ()).throw(RuntimeError("down")))
+    es._BACKEND = ("fake:x", 1024, lambda t: (_ for _ in ()).throw(RuntimeError("down")))
     try:
         assert len(es.compute_embedding("x")) == 384
     finally:
         es._BACKEND = None
 
 
-def test_load_embed_profile():
-    """GEN_EMBED__* .env 解析（cwd/.env 优先）。"""
-    orig = os.getcwd()
-    with tempfile.TemporaryDirectory() as d:
-        (Path(d) / ".env").write_text(
-            "GEN_EMBED__qwen__BASE_URL=https://x/v1\nGEN_EMBED__qwen__API_KEY=sk-x\n"
-            "GEN_EMBED__qwen__MODEL=text-embedding-v4\nGEN_EMBED__qwen__DIM=1024\nGEN_EMBED_ACTIVE=qwen\n",
-            encoding="utf-8")
-        os.chdir(d)
-        try:
-            prof = es._load_embed_profile()
-        finally:
-            os.chdir(orig)
-    assert prof and prof["model"] == "text-embedding-v4" and prof["dim"] == 1024
+def test_remote_api_backend_removed():
+    """防复活锁：embedding 后端只有本地链（mstyle / ruoyu_style / local bge / hash），
+    远程 embedding API 分支（profile 加载 / _api_embed*）不存在。"""
+    for sym in ("_load_embed_profile", "_api_embed", "_api_embed_batch"):
+        assert not hasattr(es, sym), f"远程 API embedding 已删机制不应复活: {sym}"
 
 
 def test_cosine_dim_mismatch_returns_zero():
@@ -227,25 +217,3 @@ def test_content_embedding_backend_failure_returns_none_uncached(_isolated_embed
     monkeypatch.setattr(es, "_content_embed_backend_batch", lambda texts: None)
     assert es.compute_content_embeddings_batch(["文本"]) is None
     assert not es._EMBED_MEM_CACHE   # 失败不入缓存
-
-
-def test_api_embed_l2_normalized(monkeypatch):
-    """API 后端返回裸向量必须 L2 归一 —— cosine_similarity 是纯点积，未归一会越界（2026-07-02 修）。"""
-    class _FakeResp:
-        class _D:
-            embedding = [3.0, 4.0]  # 模长 5，未归一
-        data = [_D()]
-
-    class _FakeClient:
-        def __init__(self, **kw):
-            self.embeddings = self
-
-        def create(self, **kw):
-            return _FakeResp()
-
-    import types
-    monkeypatch.setitem(sys.modules, "openai", types.SimpleNamespace(OpenAI=_FakeClient))
-    vec = es._api_embed({"api_key": "k", "base_url": "https://x/v1", "model": "m"}, "文本")
-    assert abs(vec[0] - 0.6) < 1e-9 and abs(vec[1] - 0.8) < 1e-9
-    # 自身点积 = 1（归一化后 cosine(v,v)==1 不越界）
-    assert abs(es.cosine_similarity(vec, vec) - 1.0) < 1e-9

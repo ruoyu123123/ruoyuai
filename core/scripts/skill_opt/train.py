@@ -1,7 +1,8 @@
 """SkillOpt 训练主循环。
 
 训练对 FAST 段做有界编辑，保护 SLOW 段，并用 held-out selection reward 严格选择
-候选。每次 rollout 必须消费与候选 skill digest 唯一绑定的 Claude 场景稿。
+候选。每次 rollout 必须消费与候选 skill digest 唯一绑定的 Claude 场景稿；每个
+optimizer step 必须消费与当前 skill digest 唯一绑定的 novel-skill-author patch 提案。
 """
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ sys.path.insert(0, str(REPO / "core" / "scripts"))
 
 from skill_opt import (  # noqa: E402
     dataset,
-    optimizer,
+    optimizer_jobs,
     patch_applier,
     reject_buffer,
     reward,
@@ -379,23 +380,26 @@ def train(
                 )
                 traj_dicts = [asdict(t) for t in trajs]
 
-            # optimizer 提议 patches
+            # optimizer patch 提案 (novel-skill-author 亲笔 · 确定性验收)
             current_text = current_skill_path.read_text(encoding="utf-8")
             rejects = reject_buffer.load_epoch_rejects(project_root, ep)
             opt_log = train_dir / f"ep{ep}_step{step}_optimizer.json"
             if opt_log.exists():
                 patches = json.loads(opt_log.read_text(encoding="utf-8")).get("patches", [])
             else:
-                patches, raw_reply = optimizer.propose_patches(
-                    skill_text=current_text,
+                save_checkpoint(ep, step, "awaiting_optimizer_patches")
+                patches, patch_job_dir = optimizer_jobs.require_patch_job(
+                    skill_path=current_skill_path,
+                    out_root=train_dir,
+                    step_tag=f"ep{ep}_step{step}",
                     trajectories=traj_dicts,
                     protected_sections=protected_titles,
                     rejects=rejects,
-                    skill_version=f"ep{ep}_step{step}",
                     max_patches=l_t,
                 )
                 opt_log.write_text(
-                    json.dumps({"patches": patches, "raw_reply": raw_reply[:5000]},
+                    json.dumps({"patches": patches,
+                                "patch_job_dir": str(patch_job_dir)},
                                ensure_ascii=False, indent=2),
                     encoding="utf-8",
                 )
@@ -564,7 +568,9 @@ def main() -> int:
             prepare_scene_jobs=args.prepare_scene_jobs,
             dry_run=args.dry_run,
         )
-    except scene_jobs.SceneJobsRequiredError as exc:
+    except (scene_jobs.SceneJobsRequiredError,
+            optimizer_jobs.OptimizerJobsRequiredError,
+            reward_sfs.AvJudgeJobsRequiredError) as exc:
         print(f"[REQUIRED] {exc}", file=sys.stderr)
         return 2
     return 0

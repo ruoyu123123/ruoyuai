@@ -201,6 +201,121 @@ def test_check_agent_injection_aux_requires_cluster_contract():
     assert r2["ok"]
 
 
+def test_check_agent_injection_outline_planner_precluster_modes():
+    """outline-planner 亲笔两模式（brainstorm/volume_arc_unit）发生在 cluster_001 之前，
+    契约字段是模式专属路径而非 CLUSTER_ID（同 researcher 豁免理由）。"""
+    ok_brainstorm = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 3\nPROJECT: p\nMODE: brainstorm\nTOPIC: 末世\nCOUNT: 3\n"
+        "RESEARCH_PATH: _数据库/.research_cache/inspiration_synthesis.json\n"
+        "STYLE_SKILL_PATH: _数据库/作者风格_skill.md\n"
+        "OUTPUT_PATH: _数据库/.wal/inspiration_cards.json\n"
+        "亲笔写 3 张灵感卡，这是一段足够长的派单提示用于通过长度下限校验。",
+        "outline 灵感卡", "novel-outline-planner", plan_state="ok")
+    assert ok_brainstorm["ok"], ok_brainstorm["msg"]
+
+    missing_research = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 3\nPROJECT: p\nMODE: brainstorm\nTOPIC: 末世\n"
+        "OUTPUT_PATH: _数据库/.wal/inspiration_cards.json\n"
+        "这是一段足够长的派单提示，用于确认缺 RESEARCH_PATH 会被拦截。",
+        "outline 灵感卡", "novel-outline-planner", plan_state="ok")
+    assert not missing_research["ok"]
+    assert "RESEARCH_PATH" in missing_research["msg"]
+
+    ok_unit = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 5\nPROJECT: p\nMODE: volume_arc_unit\nUNIT: skeleton\n"
+        "JOBS_MANIFEST: _数据库/.wal/volume_arc_jobs.json\n"
+        "OUTPUT_PATH: _数据库/.wal/volume_arc_skeleton.json\n"
+        "亲笔写全书骨架单元 JSON，这是一段足够长的派单提示用于通过长度下限校验。",
+        "outline 卷级大纲单元", "novel-outline-planner", plan_state="ok")
+    assert ok_unit["ok"], ok_unit["msg"]
+
+    missing_unit = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 5\nPROJECT: p\nMODE: volume_arc_unit\n"
+        "OUTPUT_PATH: _数据库/.wal/volume_arc_skeleton.json\n"
+        "这是一段足够长的派单提示，用于确认缺 UNIT/JOBS_MANIFEST 会被拦截。",
+        "outline 卷级大纲单元", "novel-outline-planner", plan_state="ok")
+    assert not missing_unit["ok"]
+    assert "UNIT" in missing_unit["msg"] and "JOBS_MANIFEST" in missing_unit["msg"]
+
+    # cluster 模式契约不受影响：仍要求 CLUSTER_ID
+    still_cluster = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 6\nPROJECT: p\nMODE: ecas_cluster_brief\n"
+        "RESEARCH_REF: _数据库/.research_cache/inspiration_synthesis.json\n"
+        "这是一段足够长的派单提示，用于确认 cluster 模式缺 CLUSTER_ID 仍被拦截。",
+        "outline 首簇详化", "novel-outline-planner", plan_state="ok")
+    assert not still_cluster["ok"]
+    assert "CLUSTER_ID" in still_cluster["msg"]
+
+
+def test_check_agent_injection_titler_contract():
+    """novel-titler 契约：PROJECT/CLUSTER_ID/TITLE_BRIEF_PATH/OUTPUT_PATH 缺一即拦。"""
+    ok = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 6\nPROJECT: p\nCLUSTER_ID: cluster_001\n"
+        "TITLE_BRIEF_PATH: _数据库/.wal/cluster_001_title_brief.json\n"
+        "OUTPUT_PATH: _数据库/.wal/cluster_001_titles.json\n"
+        "亲笔为本 cluster 全部章节命名，这是一段足够长的派单提示用于通过长度下限校验。",
+        "章节标题命名", "novel-titler", plan_state="ok")
+    assert ok["ok"], ok["msg"]
+
+    missing = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 6\nPROJECT: p\nCLUSTER_ID: cluster_001\n"
+        "这是一段足够长的派单提示，用于确认缺 brief/output 路径会被拦截。",
+        "章节标题命名", "novel-titler", plan_state="ok")
+    assert not missing["ok"]
+    assert "TITLE_BRIEF_PATH" in missing["msg"] and "OUTPUT_PATH" in missing["msg"]
+
+
+def test_check_agent_injection_av_judge_contract():
+    """novel-av-judge 契约锚是 JOBS_MANIFEST_PATH（蒸馏链无 CLUSTER_ID）。"""
+    ok = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 3\n"
+        "JOBS_MANIFEST_PATH: 对比报告/av_judge_jobs.json\n"
+        "逐任务独立配对判别仿写走味维，这是一段足够长的派单提示用于通过长度下限校验。",
+        "AV 配对判别", "novel-av-judge", plan_state="ok")
+    assert ok["ok"], ok["msg"]
+
+    missing = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 3\n"
+        "这是一段足够长的派单提示，用于确认缺 jobs manifest 路径会被拦截。",
+        "AV 配对判别", "novel-av-judge", plan_state="ok")
+    assert not missing["ok"]
+    assert "JOBS_MANIFEST_PATH" in missing["msg"]
+
+
+def test_check_agent_injection_skill_author_contract():
+    """novel-skill-author 双模式契约：draft 要作者档/版本/输出；patch 要轨迹/上限/输出；
+    未知 MODE 直接拦。"""
+    ok_draft = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 2\nMODE: draft\nPROJECT: p\n"
+        "AUTHOR_PROFILE_PATH: 作者风格.json\nSKILL_VERSION: 0\n"
+        "OUTPUT_PATH: skill_v0.md\n"
+        "亲笔撰写首版风格 skill，这是一段足够长的派单提示用于通过长度下限校验。",
+        "skill 撰写", "novel-skill-author", plan_state="ok")
+    assert ok_draft["ok"], ok_draft["msg"]
+
+    ok_patch = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 5\nMODE: patch\n"
+        "TRAJECTORY_BATCH_PATH: _skillopt/train/r1/trajectory_batch.json\n"
+        "MAX_PATCHES: 4\nOUTPUT_PATH: _skillopt/train/r1/patches.json\n"
+        "从轨迹提出有界补丁提案，这是一段足够长的派单提示用于通过长度下限校验。",
+        "skill 补丁提案", "novel-skill-author", plan_state="ok")
+    assert ok_patch["ok"], ok_patch["msg"]
+
+    bad_mode = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 5\nMODE: rewrite\nOUTPUT_PATH: x.json\n"
+        "这是一段足够长的派单提示，用于确认未知 MODE 会被拦截。",
+        "skill 撰写", "novel-skill-author", plan_state="ok")
+    assert not bad_mode["ok"]
+    assert "MODE" in bad_mode["msg"]
+
+    missing_patch = gates.check_agent_injection(
+        "PLAN_ID: p1\nSTEP: 5\nMODE: patch\nOUTPUT_PATH: x.json\n"
+        "这是一段足够长的派单提示，用于确认缺轨迹路径会被拦截。",
+        "skill 补丁提案", "novel-skill-author", plan_state="ok")
+    assert not missing_patch["ok"]
+    assert "TRAJECTORY_BATCH_PATH" in missing_patch["msg"]
+
+
 def test_check_agent_injection_plan_id_does_not_exempt_contract():
     r = gates.check_agent_injection(
         "PLAN_ID: p1\nSTEP: 2\n写 cluster_001 正文这是一段足够长的提示文字用于通过长度下限五十字校验",

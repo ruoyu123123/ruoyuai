@@ -307,6 +307,7 @@ NOVEL_SUBAGENT_TYPES = {
     "novel-outline-planner", "novel-chapter-splitter",
     "novel-reading-reflector", "novel-researcher", "novel-archivist",
     "novel-replica-writer", "novel-state-tracker",
+    "novel-titler", "novel-av-judge", "novel-skill-author",
 }
 _AUX_TYPES = {
     "novel-validator-checker", "novel-voice-checker", "novel-foreshadower",
@@ -414,6 +415,29 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
                     f"Replica writer 缺少必填字段: {', '.join(missing)}",
                     warnings,
                 )
+        elif subagent_type == "novel-outline-planner" and (
+                "MODE: brainstorm" in prompt or "MODE: volume_arc_unit" in prompt):
+            # outline 侧亲笔创作两模式发生在 cluster_001 建立之前（同 researcher 豁免
+            # 理由：此时没有 CLUSTER_ID），契约字段是模式专属路径而非 CLUSTER_ID。
+            if "MODE: brainstorm" in prompt:
+                required = {
+                    "PROJECT": has_project,
+                    "RESEARCH_PATH": "RESEARCH_PATH:" in prompt,
+                    "OUTPUT_PATH": "OUTPUT_PATH:" in prompt,
+                }
+            else:
+                required = {
+                    "PROJECT": has_project,
+                    "UNIT": "UNIT:" in prompt,
+                    "JOBS_MANIFEST": "JOBS_MANIFEST:" in prompt,
+                    "OUTPUT_PATH": "OUTPUT_PATH:" in prompt,
+                }
+            missing = [name for name, present in required.items() if not present]
+            if missing:
+                return _block(
+                    f"Outline-Planner 亲笔模式缺少必填字段: {', '.join(missing)}",
+                    warnings,
+                )
         elif subagent_type == "novel-state-tracker":
             required = {
                 "PLAN_ID": "PLAN_ID:" in prompt,
@@ -436,6 +460,51 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
             if missing:
                 return _block(
                     f"State tracker 缺少必填字段: {', '.join(missing)}",
+                    warnings,
+                )
+        elif subagent_type == "novel-titler":
+            required = {
+                "PROJECT": has_project,
+                "CLUSTER_ID": has_cluster,
+                "TITLE_BRIEF_PATH": "TITLE_BRIEF_PATH:" in prompt,
+                "OUTPUT_PATH": "OUTPUT_PATH:" in prompt,
+            }
+            missing = [name for name, present in required.items() if not present]
+            if missing:
+                return _block(
+                    f"Titler 缺少必填字段: {', '.join(missing)}",
+                    warnings,
+                )
+        elif subagent_type == "novel-av-judge":
+            # AV 配对判别发生在蒸馏链（复刻验证），契约锚是 jobs manifest 而非 CLUSTER_ID。
+            if "JOBS_MANIFEST_PATH:" not in prompt:
+                return _block(
+                    "AV judge 缺少必填字段: JOBS_MANIFEST_PATH",
+                    warnings,
+                )
+        elif subagent_type == "novel-skill-author":
+            if "MODE: draft" in prompt:
+                required = {
+                    "PROJECT": has_project,
+                    "AUTHOR_PROFILE_PATH": "AUTHOR_PROFILE_PATH:" in prompt,
+                    "SKILL_VERSION": "SKILL_VERSION:" in prompt,
+                    "OUTPUT_PATH": "OUTPUT_PATH:" in prompt,
+                }
+            elif "MODE: patch" in prompt:
+                required = {
+                    "TRAJECTORY_BATCH_PATH": "TRAJECTORY_BATCH_PATH:" in prompt,
+                    "MAX_PATCHES": "MAX_PATCHES:" in prompt,
+                    "OUTPUT_PATH": "OUTPUT_PATH:" in prompt,
+                }
+            else:
+                return _block(
+                    "Skill author MODE 必须是 draft 或 patch",
+                    warnings,
+                )
+            missing = [name for name, present in required.items() if not present]
+            if missing:
+                return _block(
+                    f"Skill author 缺少必填字段: {', '.join(missing)}",
                     warnings,
                 )
         elif is_writer:
@@ -505,10 +574,13 @@ def check_agent_injection(prompt: str, desc: str, subagent_type: str, *,
         is_splitter = ("novel-chapter-splitter" in desc
                        or "splitter" in subagent_type.lower())
         is_state_tracker = subagent_type == "novel-state-tracker"
+        # titler 是 splitter 后的格式层命名（素材=正文+title brief），无调研前置
+        is_titler = subagent_type == "novel-titler"
         is_distill = ("蒸馏" in desc or "distill-style" in desc.lower()
                       or "distill style" in desc.lower()
                       or ("PLAN_ID:" in prompt and "distill-style" in prompt))
-        if not (has_research_ref or is_splitter or is_state_tracker or is_distill):
+        if not (has_research_ref or is_splitter or is_state_tracker or is_titler
+                or is_distill):
             return _block("ECAS agent spawn 缺 RESEARCH_REF 字段", warnings)
 
     # ---- 规则 11：蒸馏复刻必须同栈 ----

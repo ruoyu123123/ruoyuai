@@ -203,15 +203,11 @@ def test_empty_open_triggers():
 
 def test_has_real_embedding_backend_false_by_default():
     old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
     try:
         assert mod._has_real_embedding_backend() is False
     finally:
         if old_eb is not None:
             os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
 
 
 def test_has_real_embedding_backend_true_when_set():
@@ -231,8 +227,6 @@ def test_default_close_hook_match_method_is_bigram():
     bigram（与改动前行为逐字节一致）。复用 test_hook_miss_triggers 同款数据。"""
     old_mode = _set_mode("active")
     old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
     try:
         proj = _mk_project(shijianji={
             "clusters": [
@@ -254,8 +248,6 @@ def test_default_close_hook_match_method_is_bigram():
         _restore(old_mode)
         if old_eb is not None:
             os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
 
 
 def test_hook_miss_semantic_path_recognizes_synonym():
@@ -437,8 +429,6 @@ def test_prefetch_not_called_without_real_backend():
     """默认（无真后端）→ 规则①语义分支不执行 → prefetch_embeddings 零调用（零回归）。"""
     old_mode = _set_mode("active")
     old_eb = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
     try:
         proj = _mk_project(shijianji={
             "clusters": [
@@ -472,8 +462,6 @@ def test_prefetch_not_called_without_real_backend():
         _restore(old_mode)
         if old_eb is not None:
             os.environ["EMBED_BACKEND"] = old_eb
-        for k, v in saved.items():
-            os.environ[k] = v
 
 
 def test_rule_3_empty_open_untouched_by_semantic_backend():

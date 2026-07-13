@@ -208,7 +208,6 @@ def _has_semantic_embedding() -> bool:
     """真语义嵌入后端就绪（非 hash）才启 embedding voice 漂移。
 
     🔴 用 embedding_store.embedding_method() 作权威判定（单一真理源）·不自己重判 env：
-      · .env 配 GEN_EMBED__* API 后端 → method=api:* → True（裸读 os.environ 漏 .env 文件配置）
       · EMBED_BACKEND=mstyle/local/ruoyu_style 但包/venv/模型缺 → embedding_store 已回退 hash →
         这里如实读到 hash → False（绝不拿 hash 假语义袋冒充真 voice 漂移·呼应 C1 风格余弦护栏）。
     """

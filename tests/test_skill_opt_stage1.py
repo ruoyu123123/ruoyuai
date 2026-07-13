@@ -1,16 +1,16 @@
-"""阶段1 测试: patch_applier (确定性) + optimizer (mock LLM)。"""
+"""阶段1 测试: patch_applier (确定性) + optimizer 验收层 + optimizer_jobs (fake agent 产物)。"""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "core" / "scripts"))
 
-from skill_opt import patch_applier, optimizer  # noqa: E402
+from skill_opt import optimizer, optimizer_jobs, patch_applier  # noqa: E402
 
 
 # ---------- patch_applier ----------
@@ -157,97 +157,46 @@ def test_apply_missing_required_fields_rejected():
     assert "new" in r.rejected[0][1]
 
 
-# ---------- optimizer (mock LLM) ----------
+# ---------- optimizer 验收层 (novel-skill-author 产物契约) ----------
 
 
-class _FakeProfile:
-    name = "fake"
-    protocol = "openai"
+def _traj(cid: str = "auto_001", reward: float = 0.5) -> dict:
+    return {"cluster_id": cid, "reward": reward, "components": {}, "replica_path": ""}
 
 
-def _fake_stream_returning(reply: str):
-    def _stream(profile, system, user, max_tokens, **kw):
-        return reply, "stop"
-    return _stream
-
-
-def test_optimizer_extracts_patches_from_json_fence():
-    reply = """这是说明
-```json
-{
-  "patches": [
-    {"op": "replace", "anchor": "## A", "old": "## A\\n\\nx", "new": "## A\\n\\ny"}
-  ]
-}
-```
-末尾文字"""
-    with patch("skill_opt.optimizer.stream_once", _fake_stream_returning(reply)):
-        patches, raw = optimizer.propose_patches(
-            skill_text="## A\n\nx\n\n## B\n\nz",
-            trajectories=[],
-            profile=_FakeProfile(),
-        )
-        assert len(patches) == 1
-        assert patches[0]["op"] == "replace"
-
-
-def test_optimizer_caps_at_max_patches():
-    """LLM 输出 10 条,只取前 4。"""
-    items = ",".join(
-        '{{"op":"add","new":"段{}"}}'.format(i).replace("{i}", str(i)) for i in range(10)
+def test_accept_patches_strict_json():
+    text = json.dumps(
+        {"patches": [{"op": "replace", "anchor": "## A", "old": "## A\n\nx", "new": "## A\n\ny"}]},
+        ensure_ascii=False,
     )
-    # 简化: 手写 10 条 json
-    patches_json = ",".join(
-        '{"op":"add","new":"段' + str(i) + '"}' for i in range(10)
-    )
-    reply = f'```json\n{{"patches": [{patches_json}]}}\n```'
-    with patch("skill_opt.optimizer.stream_once", _fake_stream_returning(reply)):
-        patches, _ = optimizer.propose_patches(
-            skill_text="x",
-            trajectories=[],
-            profile=_FakeProfile(),
-            max_patches=4,
-        )
-        assert len(patches) == 4
+    patches = optimizer.accept_patches(text)
+    assert len(patches) == 1
+    assert patches[0]["op"] == "replace"
 
 
-def test_optimizer_handles_transport_error():
-    """transport 失败 → 返回空 patches 不崩溃。"""
-    from llm_transport import TransportError
-
-    def _boom(*a, **k):
-        raise TransportError("connection refused")
-
-    with patch("skill_opt.optimizer.stream_once", _boom):
-        patches, raw = optimizer.propose_patches(
-            skill_text="x",
-            trajectories=[],
-            profile=_FakeProfile(),
-        )
-        assert patches == []
-        assert "TransportError" in raw
+def test_accept_patches_caps_at_max_patches():
+    """agent 写 10 条,只取前 4 (L_t 硬截断)。"""
+    text = json.dumps({"patches": [{"op": "add", "new": f"段{i}"} for i in range(10)]},
+                      ensure_ascii=False)
+    patches = optimizer.accept_patches(text, max_patches=4)
+    assert len(patches) == 4
 
 
-def test_optimizer_handles_malformed_json():
-    """LLM 输出非 JSON → 返回空 patches。"""
-    reply = "我无法生成 patch,请提供更多上下文。"
-    with patch("skill_opt.optimizer.stream_once", _fake_stream_returning(reply)):
-        patches, _ = optimizer.propose_patches(
-            skill_text="x",
-            trajectories=[],
-            profile=_FakeProfile(),
-        )
-        assert patches == []
+def test_accept_patches_empty_list_is_valid():
+    """空 patches = agent 明确提案无可改,合法产物。"""
+    assert optimizer.accept_patches(json.dumps({"patches": []})) == []
 
 
-def test_optimizer_prompt_includes_reject_buffer():
-    """reject buffer 不为空时,user prompt 必须包含 [REJECT_BUFFER]。"""
-    captured = {}
+def test_accept_patches_rejects_malformed_product():
+    """坏 JSON / 顶层结构错 / 条目非 object → None (job 保持 pending)。"""
+    assert optimizer.accept_patches("我无法生成 patch,请提供更多上下文。") is None
+    assert optimizer.accept_patches("[1, 2]") is None
+    assert optimizer.accept_patches(json.dumps({"patches": "oops"})) is None
+    assert optimizer.accept_patches(json.dumps({"patches": [1]})) is None
 
-    def _capture(profile, system, user, max_tokens, **kw):
-        captured["user"] = user
-        return '```json\n{"patches": []}\n```', "stop"
 
+def test_task_context_includes_reject_buffer():
+    """reject buffer 不为空时,任务上下文必须包含 [REJECT_BUFFER]。"""
     rejects = [
         {
             "patch": {"op": "replace", "old": "a", "new": "b"},
@@ -256,32 +205,184 @@ def test_optimizer_prompt_includes_reject_buffer():
             "reason": "测试",
         }
     ]
-    with patch("skill_opt.optimizer.stream_once", _capture):
-        optimizer.propose_patches(
-            skill_text="x",
-            trajectories=[],
-            rejects=rejects,
-            profile=_FakeProfile(),
+    ctx = optimizer.build_task_context(
+        skill_text="x", trajectories=[], rejects=rejects,
+    )
+    assert "REJECT_BUFFER" in ctx
+
+
+def test_task_context_marks_protected_sections():
+    ctx = optimizer.build_task_context(
+        skill_text="x",
+        trajectories=[],
+        protected_sections=["## 作者数值契约表", "## 句长基线"],
+    )
+    assert "PROTECTED" in ctx
+    assert "作者数值契约表" in ctx
+
+
+def test_task_context_carries_skill_minibatch_and_budget():
+    ctx = optimizer.build_task_context(
+        skill_text="## A\n\n骨架内容",
+        trajectories=[_traj()],
+        skill_version="ep1_step0",
+        max_patches=3,
+    )
+    assert "[ROLLOUT MINIBATCH]" in ctx
+    assert "骨架内容" in ctx
+    assert "ep1_step0" in ctx
+    assert "≤3" in ctx
+
+
+# ---------- optimizer_jobs (patch 提案任务合同) ----------
+
+
+def _require(tmp_path: Path, skill: Path, step_tag: str = "ep1_step0", l_t: int = 4):
+    return optimizer_jobs.require_patch_job(
+        skill_path=skill,
+        out_root=tmp_path,
+        step_tag=step_tag,
+        trajectories=[_traj()],
+        protected_sections=["## 量化约束"],
+        rejects=[],
+        max_patches=l_t,
+    )
+
+
+def _mk_skill(tmp_path: Path, text: str = "## A\n\nx") -> Path:
+    skill = tmp_path / "skill.md"
+    skill.write_text(text, encoding="utf-8")
+    return skill
+
+
+def test_missing_proposal_registers_pending_and_raises(tmp_path):
+    skill = _mk_skill(tmp_path)
+    with pytest.raises(optimizer_jobs.OptimizerJobsRequiredError):
+        _require(tmp_path, skill)
+    manifest = json.loads(
+        optimizer_jobs.manifest_path(tmp_path).read_text(encoding="utf-8"))
+    job = manifest["jobs"][0]
+    assert job["status"] == "pending"
+    assert job["agent"] == "novel-skill-author"
+    assert job["mode"] == "patch"
+    # job 素材自包含: skill 快照 + 上下文 + 输出位置
+    batch = json.loads(Path(job["trajectory_batch_path"]).read_text(encoding="utf-8"))
+    assert batch["skill_digest"] == job["skill_digest"]
+    assert batch["max_patches"] == 4
+    assert batch["protected_sections"] == ["## 量化约束"]
+    assert "[ROLLOUT MINIBATCH]" in batch["context_text"]
+    assert batch["output_path"] == job["patches_path"]
+    assert Path(job["skill_snapshot_path"]).read_text(encoding="utf-8") == "## A\n\nx"
+
+
+def test_ready_proposal_returns_accepted_patches(tmp_path):
+    skill = _mk_skill(tmp_path)
+    with pytest.raises(optimizer_jobs.OptimizerJobsRequiredError):
+        _require(tmp_path, skill)
+    job = json.loads(
+        optimizer_jobs.manifest_path(tmp_path).read_text(encoding="utf-8"))["jobs"][0]
+    Path(job["patches_path"]).write_text(
+        json.dumps({"patches": [{"op": "add", "new": "## 新段\n\n内容"}]},
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+    patches, job_dir = _require(tmp_path, skill)
+    assert patches == [{"op": "add", "new": "## 新段\n\n内容"}]
+    assert job_dir == optimizer_jobs.job_dir_for(
+        tmp_path, "ep1_step0", job["skill_digest"])
+    manifest = json.loads(
+        optimizer_jobs.manifest_path(tmp_path).read_text(encoding="utf-8"))
+    assert manifest["jobs"][0]["status"] == "ready"
+
+
+def test_ready_proposal_truncates_over_budget(tmp_path):
+    skill = _mk_skill(tmp_path)
+    with pytest.raises(optimizer_jobs.OptimizerJobsRequiredError):
+        _require(tmp_path, skill, l_t=2)
+    job = json.loads(
+        optimizer_jobs.manifest_path(tmp_path).read_text(encoding="utf-8"))["jobs"][0]
+    Path(job["patches_path"]).write_text(
+        json.dumps({"patches": [{"op": "add", "new": f"段{i}"} for i in range(6)]},
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+    patches, _ = _require(tmp_path, skill, l_t=2)
+    assert len(patches) == 2
+
+
+def test_malformed_proposal_stays_pending(tmp_path):
+    """agent 产物结构不合格 → 不当空提案,仍是 required 缺件。"""
+    skill = _mk_skill(tmp_path)
+    with pytest.raises(optimizer_jobs.OptimizerJobsRequiredError):
+        _require(tmp_path, skill)
+    job = json.loads(
+        optimizer_jobs.manifest_path(tmp_path).read_text(encoding="utf-8"))["jobs"][0]
+    Path(job["patches_path"]).write_text("这不是 JSON", encoding="utf-8")
+    with pytest.raises(optimizer_jobs.OptimizerJobsRequiredError):
+        _require(tmp_path, skill)
+    manifest = json.loads(
+        optimizer_jobs.manifest_path(tmp_path).read_text(encoding="utf-8"))
+    assert manifest["jobs"][0]["status"] == "pending"
+
+
+def test_patch_jobs_digest_isolated(tmp_path):
+    """不同 skill 内容 → 不同 digest → 独立 job 目录,互不串稿。"""
+    first = tmp_path / "first.md"
+    second = tmp_path / "second.md"
+    first.write_text("candidate A", encoding="utf-8")
+    second.write_text("candidate B", encoding="utf-8")
+    for skill in (first, second):
+        with pytest.raises(optimizer_jobs.OptimizerJobsRequiredError):
+            _require(tmp_path, skill)
+    jobs = json.loads(
+        optimizer_jobs.manifest_path(tmp_path).read_text(encoding="utf-8"))["jobs"]
+    assert len(jobs) == 2
+    assert jobs[0]["skill_digest"] != jobs[1]["skill_digest"]
+    assert jobs[0]["trajectory_batch_path"] != jobs[1]["trajectory_batch_path"]
+
+
+def test_verified_batch_receipt_requires_all_ready(tmp_path):
+    skill = _mk_skill(tmp_path)
+    with pytest.raises(optimizer_jobs.OptimizerJobsRequiredError):
+        _require(tmp_path, skill)
+    # pending job → 批次回执拒绝
+    with pytest.raises(optimizer_jobs.OptimizerJobsRequiredError):
+        optimizer_jobs.write_verified_batch_receipt(
+            out_root=tmp_path, plan_id="p-1", step=4,
+            output=tmp_path / "receipt.json",
         )
-    assert "REJECT_BUFFER" in captured["user"]
+    job = json.loads(
+        optimizer_jobs.manifest_path(tmp_path).read_text(encoding="utf-8"))["jobs"][0]
+    Path(job["patches_path"]).write_text(
+        json.dumps({"patches": [{"op": "add", "new": "## 新段\n\n内容"}]},
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+    output = tmp_path / "patch_receipts_step4.json"
+    receipt = optimizer_jobs.write_verified_batch_receipt(
+        out_root=tmp_path, plan_id="p-1", step=4, output=output,
+    )
+    assert receipt["agent"] == "novel-skill-author"
+    assert receipt["mode"] == "patch-proposal-batch"
+    assert receipt["job_count"] == 1
+    assert receipt["jobs"][0]["patch_count"] == 1
+    assert output.is_file()
 
 
-def test_optimizer_prompt_marks_protected_sections():
-    captured = {}
-
-    def _capture(profile, system, user, max_tokens, **kw):
-        captured["user"] = user
-        return '```json\n{"patches": []}\n```', "stop"
-
-    with patch("skill_opt.optimizer.stream_once", _capture):
-        optimizer.propose_patches(
-            skill_text="x",
-            trajectories=[],
-            protected_sections=["## 作者数值契约表", "## 句长基线"],
-            profile=_FakeProfile(),
+def test_verified_batch_receipt_rejects_empty_manifest(tmp_path):
+    with pytest.raises(ValueError):
+        optimizer_jobs.write_verified_batch_receipt(
+            out_root=tmp_path, plan_id="p-1", step=4,
+            output=tmp_path / "receipt.json",
         )
-    assert "PROTECTED" in captured["user"]
-    assert "作者数值契约表" in captured["user"]
+
+
+def test_verified_batch_receipt_requires_plan_id(tmp_path):
+    with pytest.raises(ValueError):
+        optimizer_jobs.write_verified_batch_receipt(
+            out_root=tmp_path, plan_id="", step=4,
+            output=tmp_path / "receipt.json",
+        )
 
 
 # ---------- S1 安全锁: IMMUTABLE_ANCHORS ----------

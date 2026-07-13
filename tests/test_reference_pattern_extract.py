@@ -6,7 +6,7 @@
 - 版权纪律：artifact 任意字符串值 <50 字符 + 原文句子绝不泄漏进 artifact
 - 无语料 / 无风格库 → 优雅 skip exit 0（不产物）
 - 作者风格.json quantitative 量化指纹复用（仅数值·字符串全部剥掉）
-- skeleton prompt 注入两态（artifact 存在 → 注入「参考作品结构基线」；缺失 → 不注入）
+- jobs 清单注入两态（artifact 存在 → volume_arc_jobs.json 携带「参考作品结构基线」块；缺失 → 空串）
 - outline.plan.json 合法 + step5 条件脚本行（行首 ? ·口径同 style_injector）+ 引用脚本真实存在
 
 零依赖范式：文件尾 __main__ 循环跑 test_* 打 [OK]/[FAIL]（pytest 同样可收集）。
@@ -176,8 +176,26 @@ def test_fingerprint_absent_when_no_profile():
         assert "author_profile_fingerprint" not in data
 
 
-# ============ 5. skeleton prompt 注入两态 ============
-def test_skeleton_prompt_injects_block_when_present():
+# ============ 5. jobs 清单注入两态（消费端 = volume_arc_jobs.json 的 reference_patterns_block）============
+def _run_volume_arc_pending(project: Path) -> dict:
+    """跑 volume_arc（骨架单元缺失 → exit 2=pending）→ 返回任务清单 dict。"""
+    import types
+    card = project / "_数据库" / ".wal" / "card.json"
+    card.write_text(json.dumps({"answer": {"title": "钟楼"}}, ensure_ascii=False),
+                    encoding="utf-8")
+    args = types.SimpleNamespace(
+        project=str(project), selected_card=str(card), cluster_count=8,
+        framework="三幕", rhythm="标准", style_ref=None, research=None,
+        emit_to_db=True)
+    rc = gva._run_volume_arc(args)
+    assert rc == 2, f"骨架单元缺失应 exit 2=pending，实得 {rc}"
+    return json.loads((project / "_数据库" / ".wal" / gva.VOLUME_ARC_JOBS_WAL)
+                      .read_text(encoding="utf-8"))
+
+
+def test_jobs_manifest_carries_block_when_present():
+    """artifact 存在 → volume_arc 任务清单携带 reference_patterns_block（agent 读它当
+    advisory 结构参照·非硬约束）。"""
     with tempfile.TemporaryDirectory() as td:
         project = _build_tree(Path(td))
         assert rpe.main([str(project)]) == 0
@@ -186,22 +204,18 @@ def test_skeleton_prompt_injects_block_when_present():
         assert "章均CJK" in block and "冲突节奏" in block
         # 注入块本身也不许携带原文
         assert _DISTINCT_SENTENCE not in block
-        system, _user = gva.build_volume_arc_skeleton_prompt(
-            selected_card={"title": "钟楼"}, cluster_count=8, framework="三幕",
-            rhythm="标准", author_block="# 作者档", research_text="",
-            reference_patterns_block=block)
-        assert "参考作品结构基线" in system, "骨架 prompt 未注入参考结构基线段"
-        assert "advisory·可偏离" in system
-        assert block.splitlines()[1] in system, "注入块数字内容没进 system"
+        manifest = _run_volume_arc_pending(project)
+        assert manifest["reference_patterns_block"] == block, \
+            "任务清单未携带参考结构基线块（agent 消费入口断了）"
 
 
-def test_skeleton_prompt_omits_block_when_absent():
-    system, _user = gva.build_volume_arc_skeleton_prompt(
-        selected_card={"title": "钟楼"}, cluster_count=8, framework="三幕",
-        rhythm="标准", author_block="# 作者档", research_text="")
-    assert "参考作品结构基线" not in system, "无 artifact 时不该注入基线段"
-    # 缺省参数向后一致：原有调用（不传 reference_patterns_block）不受影响
-    assert "卷级大势骨架" in system
+def test_jobs_manifest_empty_block_when_absent():
+    """无 artifact → 任务清单 reference_patterns_block 为空串（agent 不注入基线）。"""
+    with tempfile.TemporaryDirectory() as td:
+        project = _build_tree(Path(td), chapters=0)   # 无语料 → 无 artifact
+        assert rpe.main([str(project)]) == 0
+        manifest = _run_volume_arc_pending(project)
+        assert manifest["reference_patterns_block"] == "", "无 artifact 时基线块应为空串"
 
 
 # ============ 6. plan JSON 合法 + step5 条件脚本口径 ============

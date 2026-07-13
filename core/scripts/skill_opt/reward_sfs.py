@@ -30,11 +30,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from . import scene_jobs
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from distill_av_verify import JOBS_MANIFEST_NAME, jobs_dir_for  # noqa: E402
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DISTILL_REPLICATE = REPO_ROOT / "core" / "scripts" / "distill_replicate.py"
 STYLE_EVALUATOR = REPO_ROOT / "core" / "scripts" / "style_evaluator.py"
 DISTILL_AV_VERIFY = REPO_ROOT / "core" / "scripts" / "distill_av_verify.py"
+
+
+class AvJudgeJobsRequiredError(RuntimeError):
+    """AV 配对判别需要主代理按 av_judge_jobs.json spawn novel-av-judge 补件。"""
 
 # S1 reward slop penalty: 复刻文本含 AI 腔高频词 → reward 扣分
 # 让"skill 删反 AI 腔约束后复刻文本 AI 腔回潮"在 reward 可见
@@ -198,14 +205,18 @@ def reward_for_cluster_sfs(
         run_id=run_id,
     )
 
-    # 1. 复刻
-    distill_ec, distill_dur = _run_distill_replicate(
-        style_skill=style_skill,
-        cluster_id=cluster_id,
-        project=project_root,
-        output=replica_path,
-        claude_scenes_dir=claude_scenes_dir,
-    )
+    # 1. 复刻（幂等：同 run_id 的 replica 已落盘则复用——AV 两段式 exit 2 补件后
+    #    以同一 run_id 恢复重入时，replica 不重润色 → 输入 digest 稳定 → verdict 不作废）
+    if replica_path.exists():
+        distill_ec, distill_dur = 0, 0.0
+    else:
+        distill_ec, distill_dur = _run_distill_replicate(
+            style_skill=style_skill,
+            cluster_id=cluster_id,
+            project=project_root,
+            output=replica_path,
+            claude_scenes_dir=claude_scenes_dir,
+        )
     if distill_ec != 0 or not replica_path.exists():
         return SfsReward(
             sfs_score=0.0,
@@ -222,7 +233,16 @@ def reward_for_cluster_sfs(
             },
         )
 
+    # required AV（两段式）：exit 2 + manifest 已渲染 = 投票任务 pending → 抛 required
+    # （train.py exit 2 · 主代理 spawn novel-av-judge 补件后同 run_id 恢复）；其余非 0 = 硬失败。
     av_ec = _run_av_verify(project_root, cluster_id, replica_path, av_json)
+    av_jobs_manifest = jobs_dir_for(av_json) / JOBS_MANIFEST_NAME
+    if av_ec == 2 and av_jobs_manifest.exists() and not av_json.exists():
+        raise AvJudgeJobsRequiredError(
+            f"AV 配对判别待 novel-av-judge 补件: cluster={cluster_id}；"
+            f"任务清单 {av_jobs_manifest}。主代理按 manifest spawn novel-av-judge "
+            "写 verdict 与批次回执后，以同一 run_id 重跑恢复。"
+        )
     if av_ec != 0 or not av_json.exists():
         raise RuntimeError(
             f"required AV 执行或报告失败: cluster={cluster_id} exit={av_ec} output={av_json}"

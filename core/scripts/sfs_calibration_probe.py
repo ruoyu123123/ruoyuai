@@ -24,7 +24,7 @@
   SFS_POORLY_CALIBRATED_FOR_AUTHOR 绝不 hard_gate（探针自身噪声 = 检测无能）。
 
 【默认 scorer】
-  未传 --scorer 时的默认 scorer：真后端（EMBED_BACKEND≠hash 或配了 GEN_EMBED__*）→
+  未传 --scorer 时的默认 scorer：真后端（EMBED_BACKEND 非空非 hash）→
   embedding_store 余弦（source 非 placeholder）；无真后端 → 现有 char-3gram Jaccard
   （_placeholder=true·让 CI 可跑）。--scorer python_module:func 覆盖通道不受影响，
   优先级最高（显式指定 > 真后端自动升级 > 占位兜底）。
@@ -60,16 +60,12 @@ def _mode() -> str:
 
 
 def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
-    跟 topic_drift_scanner._has_real_embedding_backend 判断逻辑完全一致（各文件各自留一份）。
+    """EMBED_BACKEND 非空且非 hash（本地 daemon/ruoyu_style/mstyle/local 链）→ True；
+    未设或 =hash（默认 hash 袋·无真语义）→ False。本仓约定：每个消费风格 embedding
+    的文件自带一份同口径判定，不互相 import。
     """
     eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    return bool(eb) and eb != "hash"
 
 
 def _cjk_count(text: str) -> int:

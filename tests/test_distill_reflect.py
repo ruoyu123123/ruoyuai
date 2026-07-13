@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-"""gen_creative distill_reflect mode 测试（phase-3·产 skill markdown·must_fix#5 关 JSON parse）。"""
-import json
+"""gen_creative distill_reflect --verify 测试（skill 由 novel-skill-author 亲笔·脚本只验收）。
+
+验：五必备小节+≥200 字确定性验收门；验收不过 exit 2（主代理重 spawn agent）；
+缺 --verify 的旧 LLM 生成入口已删（响亮拒绝 exit 1）。
+"""
 import sys
 import tempfile
 import types
@@ -10,7 +13,6 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 
 import gen_creative as gc  # noqa: E402
-import llm_transport as lt  # noqa: E402
 
 _GOOD_MD = """# 作者风格 skill v2
 
@@ -36,164 +38,99 @@ _GOOD_MD = """# 作者风格 skill v2
 """
 
 
-class _Args:
-    def __init__(self, tmp, gap, **kw):
-        self.project = str(tmp)
-        self.gap_report = str(gap)
-        self.current_skill = None
-        self.skill_version = 2
-        self.style_ref = None
-        self.dry_run = False
-        self.out = None
-        for k, v in kw.items():
-            setattr(self, k, v)
+def _args(**kw):
+    a = types.SimpleNamespace(skill=None, verify=True)
+    for k, v in kw.items():
+        setattr(a, k, v)
+    return a
 
 
-def _setup():
-    tmp = Path(tempfile.mkdtemp())
-    (tmp / "_数据库").mkdir(parents=True)
-    gap = tmp / "gap.json"
-    gap.write_text(json.dumps({"dimensions": [{"name": "句长", "gap": "复刻16 vs作者31"}]},
-                              ensure_ascii=False), encoding="utf-8")
-    return tmp, gap
-
-
-def _patch_generate(monkey_text):
-    orig = lt.generate
-
-    def fake(loader, system, user, **kw):
-        # must_fix#5：reflect 绝不传 response_format_json（markdown 输出）
-        assert "response_format_json" not in kw or kw["response_format_json"] is False
-        return types.SimpleNamespace(text=monkey_text)
-    lt.generate = fake
-    return orig
-
-
-def _patch_generate_sequence(*texts):
-    """序列返回 text（末个之后复用末个）·验 reflect retry 自愈。返回 (orig, calls)。"""
-    orig = lt.generate
-    calls = {"n": 0}
-
-    def fake(loader, system, user, **kw):
-        assert "response_format_json" not in kw or kw["response_format_json"] is False
-        i = min(calls["n"], len(texts) - 1)
-        calls["n"] += 1
-        return types.SimpleNamespace(text=texts[i])
-    lt.generate = fake
-    return orig, calls
-
-
-def test_reflect_writes_skill_markdown():
-    tmp, gap = _setup()
-    orig = _patch_generate(_GOOD_MD)
+def _run_main(argv: list[str]) -> int | None:
+    old_argv = sys.argv[:]
+    sys.argv = argv
     try:
-        rc = gc._run_distill_reflect(_Args(tmp, gap))
-        assert rc == 0
-        skill = tmp / "skill_v2.md"
-        assert skill.exists()
-        md = skill.read_text(encoding="utf-8")
-        assert "## 句式与节奏" in md and "## 反模式" in md
+        gc.main()
+        return None
+    except SystemExit as e:
+        return int(e.code or 0)
     finally:
-        lt.generate = orig
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+        sys.argv = old_argv
 
 
-def test_reflect_block_on_empty_output():
-    tmp, gap = _setup()
-    orig = _patch_generate("太短")   # < 200 字 → 结构破损 block
-    try:
-        assert gc._run_distill_reflect(_Args(tmp, gap)) == 1
-        assert not (tmp / "skill_v2.md").exists()
-    finally:
-        lt.generate = orig
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+def test_verify_passes_valid_skill():
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "skill_v2.md"
+        p.write_text(_GOOD_MD, encoding="utf-8")
+        assert gc._verify_distill_skill(_args(skill=str(p))) == 0
 
 
-def test_reflect_block_on_missing_sections():
-    tmp, gap = _setup()
-    # 长但缺过半必备小节 → block
-    bad = "# skill\n\n" + ("一些内容。\n" * 60)
-    orig = _patch_generate(bad)
-    try:
-        assert gc._run_distill_reflect(_Args(tmp, gap)) == 1
-    finally:
-        lt.generate = orig
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+def test_verify_rejects_too_short():
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "skill_v2.md"
+        p.write_text("太短", encoding="utf-8")
+        assert gc._verify_distill_skill(_args(skill=str(p))) == 2
 
 
-def test_reflect_retry_recovers_from_transient_break():
-    """🔴 真机 e2e 同类加固 2026-06-15：reflect 与 volume_arc 同根——单点 gen-model 调用偶发
-    空/缺小节(限速/抖动)直接 block 逼用户 --resume(GUI 蒸馏致命)。验 retry 自愈：第一次太短
-    (破损)·第二次合法 skill → rc==0 + 落盘(不 block)。"""
-    tmp, gap = _setup()
-    orig, calls = _patch_generate_sequence("太短", _GOOD_MD)  # 破损 → 合法
-    try:
-        rc = gc._run_distill_reflect(_Args(tmp, gap))
-        assert rc == 0, "第二次合法应自愈 rc==0(不 block)"
-        assert calls["n"] == 2, "应重试 1 次(共调 2 次)"
-        assert (tmp / "skill_v2.md").exists(), "自愈后应落盘"
-    finally:
-        lt.generate = orig
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+def test_verify_rejects_missing_sections():
+    """长但缺必备小节 → exit 2（agent 合约要求五小节全齐·验收强于旧容忍口径）。"""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "skill_v2.md"
+        p.write_text("# skill\n\n" + ("一些内容。\n" * 60), encoding="utf-8")
+        assert gc._verify_distill_skill(_args(skill=str(p))) == 2
 
 
-def test_reflect_retry_exhausted_still_blocks():
-    """3 次全破损 → block exit 1(确定性破损不无限重试·不静默吞断链)。"""
-    tmp, gap = _setup()
-    orig, calls = _patch_generate_sequence("太短")  # 每次都破损
-    try:
-        rc = gc._run_distill_reflect(_Args(tmp, gap))
-        assert rc == 1, "3 次全破损应 block 非零退出"
-        assert calls["n"] == 3, "应尝试满 3 次(MAX_REFLECT_TRIES)"
-        assert not (tmp / "skill_v2.md").exists(), "破损不落盘"
-    finally:
-        lt.generate = orig
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+def test_verify_rejects_single_missing_section():
+    """恰缺 1 节也不放行（五小节全 required·不容 2 节缺失的旧降级口径）。"""
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "skill_v2.md"
+        p.write_text(_GOOD_MD.replace("## 反模式（绝不做）", "## 别的东西"),
+                     encoding="utf-8")
+        assert gc._verify_distill_skill(_args(skill=str(p))) == 2
 
 
-def test_reflect_v0_no_gap_generates_initial_skill():
-    """gap-report 空 → 首版 v0 生成（破 chicken-egg：复刻需 skill_v0·SFS 需复刻）。"""
-    tmp, _ = _setup()
-    orig = _patch_generate(_GOOD_MD)
-    try:
-        a = _Args(tmp, tmp / "nonexist.json", skill_version=0,
-                  out=str(tmp / "skill_v0.md"))
-        a.gap_report = None
-        assert gc._run_distill_reflect(a) == 0
-        assert (tmp / "skill_v0.md").exists()
-        # v0 prompt 走「从作者档提炼」分支
-        s, u = gc.build_distill_reflect_prompt(
-            gap_text="", current_skill="", author_block="作者档", version=0)
-        assert "首版" in s and "首版 skill" in u
-    finally:
-        lt.generate = orig
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+def test_verify_missing_file_exit2_for_respawn():
+    """skill 未落盘 = agent 未产出 → exit 2（主代理重 spawn novel-skill-author）。"""
+    with tempfile.TemporaryDirectory() as td:
+        assert gc._verify_distill_skill(_args(skill=str(Path(td) / "nope.md"))) == 2
 
 
-def test_reflect_with_gap_uses_refine_branch():
-    s, u = gc.build_distill_reflect_prompt(
-        gap_text="句长差距大", current_skill="旧skill", author_block="作者档", version=2)
-    assert "精化版" in s
-    assert "SFS 复刻差距报告" in u
+def test_verify_missing_skill_arg_exit1():
+    assert gc._verify_distill_skill(_args(skill=None)) == 1
 
 
-def test_reflect_custom_out_path():
-    tmp, gap = _setup()
-    orig = _patch_generate(_GOOD_MD)
-    try:
-        out = tmp / "styles" / "myskill.md"
-        rc = gc._run_distill_reflect(_Args(tmp, gap, out=str(out)))
-        assert rc == 0 and out.exists()
-    finally:
-        lt.generate = orig
-        import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+def test_verify_pure_function_rules():
+    assert gc.verify_distill_skill_text(_GOOD_MD) == []
+    errs = gc.verify_distill_skill_text("短")
+    assert errs and any("过短" in e for e in errs)
+    errs2 = gc.verify_distill_skill_text("x" * 300)
+    assert errs2 and any("缺必备小节" in e for e in errs2)
+
+
+def test_cli_distill_reflect_requires_verify():
+    """旧 LLM 生成入口已删：--mode distill_reflect 不带 --verify → 响亮 exit 1。"""
+    code = _run_main(["gen_creative.py", "--mode", "distill_reflect",
+                      "--skill", "whatever.md"])
+    assert code == 1, f"缺 --verify 应响亮拒绝 exit 1，实得 {code}"
+
+
+def test_cli_distill_reflect_verify_end_to_end():
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "skill_v0.md"
+        p.write_text(_GOOD_MD, encoding="utf-8")
+        code = _run_main(["gen_creative.py", "--mode", "distill_reflect",
+                          "--verify", "--skill", str(p)])
+        assert code in (None, 0), f"合法 skill 应验收通过，实得 {code}"
+
+
+def test_no_llm_pipeline_left_in_module():
+    """LLM 生成管线彻底清除（不兼容不降级·旧路径删干净）。"""
+    for gone in ("call_gen_model", "build_distill_reflect_prompt",
+                 "build_brainstorm_prompt", "_run_distill_reflect",
+                 "resolve_max_tokens", "check_deps"):
+        assert not hasattr(gc, gone), f"旧 LLM 管线残留: {gone}"
+    src = (_ROOT / "core" / "scripts" / "gen_creative.py").read_text(encoding="utf-8")
+    for token in ("llm_transport", "GenModelLoader", "openai", "OpenAI"):
+        assert token not in src, f"gen_creative.py 残留 LLM 依赖: {token}"
 
 
 if __name__ == "__main__":

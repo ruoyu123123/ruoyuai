@@ -310,7 +310,7 @@ class TestCallGenModelRefusalRetry:
         assert text == body_normal
 
 
-# ═══════════════════════════════ Part 4: 正常路径不污染保护（gen_writer / av_judge / gen_creative） ═══════════════════════════════
+# ═══════════════════════════════ Part 4: 正常路径不污染保护（gen_writer / av_judge） ═══════════════════════════════
 
 class TestNormalPathsUntouched:
     """确认 llm_transport.generate 等正常路径不调 _is_refusal · 行为零变更。"""

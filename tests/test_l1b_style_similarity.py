@@ -41,10 +41,9 @@ def _set_mode(mode):
 
 
 def _hash_backend():
-    """强制 embedding_store 用默认 hash 后端（测试确定性·不触真语义 API）。"""
+    """强制 embedding_store 用默认 hash 后端（测试确定性·不触真语义后端）。"""
     es._BACKEND = None
     os.environ.pop("EMBED_BACKEND", None)
-    os.environ.pop("GEN_EMBED_ACTIVE", None)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -407,7 +406,6 @@ def test_J_mstyle_default_still_hash_zero_regression():
     """关键纪律：不设 EMBED_BACKEND → 默认仍 hash（零回归·即使环境装了 mstyle 也不静默切）。"""
     es._BACKEND = None
     os.environ.pop("EMBED_BACKEND", None)
-    os.environ.pop("GEN_EMBED_ACTIVE", None)
     try:
         assert es.embedding_method() == "hash"
         assert es._detect_backend()[1] == 384

@@ -352,15 +352,11 @@ def _real_cosine_similarity():
 
 def test_has_real_embedding_backend_false_by_default():
     bak = os.environ.pop("EMBED_BACKEND", None)
-    gen_keys = [k for k in os.environ if k.startswith("GEN_EMBED__")]
-    saved = {k: os.environ.pop(k) for k in gen_keys}
     try:
         assert mac._has_real_embedding_backend() is False
     finally:
         if bak is not None:
             os.environ["EMBED_BACKEND"] = bak
-        for k, v in saved.items():
-            os.environ[k] = v
 
 
 def test_has_real_embedding_backend_true_with_mstyle():

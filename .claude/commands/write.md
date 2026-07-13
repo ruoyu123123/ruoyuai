@@ -8,7 +8,7 @@ description: 当用户从零开始想写一部小说，且需要主代理引导�
 
 | 步骤 | 唯一执行方式 |
 |---|---|
-| 灵感卡 | `gen_creative.py --mode brainstorm`，基于调研缓存生成 |
+| 灵感卡 | `/outline` step 3 spawn `novel-outline-planner MODE=brainstorm`：Claude 读调研缓存亲笔写卡 → `gen_creative.py --mode brainstorm --verify` 确定性验收（source_refs 必须真实存在于调研缓存） |
 | 正文 | `/cluster-write` step 2 spawn `novel-writer`：Claude 亲笔逐场景写 `claude_scenes/` → `gen_writer.py --project <path> --cluster N` 调 gemini 分段等体量润色出终稿 |
 | 违规修复 | checker 生成 brief，`gen_fixer.py` 按 brief 改 cluster 草稿 |
 | 对话 voice 修复 | `novel-voice-checker` 生成 brief，`gen_fixer.py --mode voice-fix` 修 |

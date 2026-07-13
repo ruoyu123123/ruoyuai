@@ -261,7 +261,7 @@ def main():
     }
     save_cache(cache)
     print(f"\n[probe] 缓存写入: {cache_path}")
-    print(f"[probe] gen_writer.py / gen_fixer.py / gen_creative.py 启动时自动读取")
+    print(f"[probe] gen_writer.py / gen_fixer.py 启动时自动读取")
 
 
 if __name__ == '__main__':

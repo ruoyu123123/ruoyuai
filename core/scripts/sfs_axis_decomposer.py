@@ -6,17 +6,19 @@
 Fidelity Score）混淆 plot/theme/voice 多维相似度，可能 90 分但 voice 维度只 40。
 12 轴分解定位「真 voice 复刻」vs「只是 plot 相似」。
 
-【12 轴 · 2026-07-02 接线 embedding_store】
-  · 4 av_judge traits（已存在 voice/pace/imagery/syntax → 复用 av_judge.AV_DIMS）
+【12 轴 · 接线 embedding_store】
+  · 4 判官特质轴（voice/pace/imagery/syntax · --av-json 传入调用方自备数值：1-5 或
+    {score: 0-100}。av_judge 实际输出是 AV_TRAIT_DIMS 四中文维 + verdict∈{命中,走味}
+    定性判别，喂入前需调用方自行映射成本文件轴名+数值）
   · 8 sentence-embedding cosine 代理：
       Plot / CharacterStates / Relationship / Theme / Time / ToneTags / Fandom / Author
-    真后端（EMBED_BACKEND≠hash 或配了 GEN_EMBED__*）时，Author/Theme/ToneTags 三轴用
+    真后端（EMBED_BACKEND 非空非 hash）时，Author/Theme/ToneTags 三轴用
     embedding_store 算 author 全文 vs replica 全文余弦（source="embedding"，非 placeholder）——
     这三轴天然是整体文本维度，全文余弦合理；其余 5 轴（Plot/CharacterStates/Relationship/
     Time/Fandom）需要轴向专属文本抽取器（当前缺），继续走 sha256 占位。
     无真后端 → 8 轴全部 placeholder，逐字节保持原行为（诚实降级）。
 
-【做法 · shadow-only · 部署前一次性比对 · distill_replicate --axis-decompose】
+【做法 · shadow-only · 部署前一次性比对 · 独立 CLI】
   · 输入：author_text + replica_text + (optional) av_verdicts dict
   · 输出：{ axis_name: { score: 0-100, source: "av_judge"|"embedding"|"embed_placeholder", _placeholder: bool } }
   · 衍生：SFS_PLOT_CONFOUND_RISK — Author/Voice < 50 但 Plot > 70 → 风险
@@ -26,7 +28,7 @@ Fidelity Score）混淆 plot/theme/voice 多维相似度，可能 90 分但 voic
     Plot/CharacterStates 等轴向文本抽取真实现 defer（需先有场景/人物专属摘要抽取器）。
 
 【北极星】②④⑤ shadow-only · 永不进 hard_gate · 不改 active SFS 报警链
-  仅作为 distill_replicate 部署前一次性诊断 · audit_hub 不调度。
+  仅作为部署前一次性人工诊断（独立 CLI）· audit_hub 不调度。
 
 env SFS_AXIS_DECOMPOSE_MODE: off / shadow(默认)
 用法: python sfs_axis_decomposer.py --author <p1> --replica <p2> [--av-json <p3>]
@@ -61,16 +63,12 @@ def _mode() -> str:
 
 
 def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
-    跟 topic_drift_scanner._has_real_embedding_backend 判断逻辑完全一致（各文件各自留一份）。
+    """EMBED_BACKEND 非空且非 hash（本地 daemon/ruoyu_style/mstyle/local 链）→ True；
+    未设或 =hash（默认 hash 袋·无真语义）→ False。本仓约定：每个消费风格 embedding
+    的文件自带一份同口径判定，不互相 import。
     """
     eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    return bool(eb) and eb != "hash"
 
 
 def _deterministic_seed(author: str, replica: str, axis: str) -> int:
@@ -133,8 +131,10 @@ def compute_embedding_axes(author: str, replica: str) -> dict:
 
 
 def merge_av_axes(av_verdicts: dict | None) -> dict:
-    """av_judge 4 维 → 0-100 SFS 同标尺。av_judge 默认 verdict={voice:int(1-5),...}。
-    1-5 → (n-1)/4*100 线性映射。"""
+    """调用方自备判官数值 → 0-100 SFS 同标尺。av_verdicts 形如 {voice: 1-5 数值}
+    或 {voice: {score: 0-100 或 1-5}}；1-5 量纲按 (n-1)/4*100 线性映射。
+    av_judge 实际输出是 AV_TRAIT_DIMS 四中文维 + verdict∈{命中,走味} 定性判别，
+    不是本函数输入 schema——喂入前需调用方自行映射轴名与数值。"""
     out = {}
     if not isinstance(av_verdicts, dict):
         return {ax: {"score": None, "source": "av_missing", "_placeholder": False} for ax in AV_AXES}

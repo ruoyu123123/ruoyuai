@@ -27,9 +27,10 @@ extraction · no raw copyrighted text copied into prompts"）。Ex3 用微调模
 条件性：风格库不存在 / 无 原文/*.txt → 优雅 skip（exit 0·不产物）。幂等：语料签名
 （文件名+字节数）未变且 artifact 已存在 → 直接复用不重算（--force 强制重算）。
 
-消费端：gen_creative_volume_arc.build_volume_arc_skeleton_prompt 在 artifact 存在时
-注入「参考作品结构基线（advisory·可偏离）」——北极星⑤：数字化结构参照非硬约束，
-大势卡内容仍由模型按灵感卡自由创作。
+消费端：gen_creative_volume_arc._run_volume_arc 在 artifact 存在时把「参考作品结构
+基线（advisory·可偏离）」写进 volume_arc_jobs.json 的 reference_patterns_block 供
+novel-outline-planner MODE=volume_arc_unit 读——北极星⑤：数字化结构参照非硬约束，
+大势卡内容仍由 agent 按灵感卡自由创作。
 """
 from __future__ import annotations
 import argparse
@@ -303,8 +304,8 @@ def _fmt(v) -> str:
 
 
 def build_reference_patterns_block(project_root) -> str:
-    """artifact → 骨架 prompt 注入文本（缺 artifact / 结构破损 → ""·调用方据此不注入）。
-    全部为数字化描述——advisory 结构参照，绝不是硬约束（北极星⑤）。"""
+    """artifact → 任务清单 reference_patterns_block 文本（缺 artifact / 结构破损 → ""·
+    调用方据此不注入）。全部为数字化描述——advisory 结构参照，绝不是硬约束（北极星⑤）。"""
     art = locate_patterns_artifact(Path(project_root))
     if art is None:
         return ""

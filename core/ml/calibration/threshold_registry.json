@@ -59,7 +59,7 @@
       "compares": "同角色跨场景对话 embedding cosine 距离--超过此值判定 voice 漂移",
       "pinned_by_tests": [],
       "marker_lines": [
-        225
+        224
       ],
       "note": "已有真实反例实测（2026-06-29，ruoyu_style 模型）：同一草稿冷硬短句 vs 热络长句同角色对白 cosine 距离仅 0.1062，远低于 0.3 floor。作者风格 embedding 本身把同作者文本映射得偏近，当前 floor 对该后端明显偏保守（宁可漏报）。这是本次盘点里唯一带定量反例证明 floor 可能测不出真漂移 的条目，Wave-6 校准应优先处理。"
     },
@@ -77,7 +77,7 @@
         "tests/test_revision_homogenization_scanner.py"
       ],
       "marker_lines": [
-        99
+        92
       ],
       "note": "量纲是 cosine 距离 0-2，与同文件另一 L1 z-distance 的 DELTA_SFS_FLOOR=2.0 不同标尺，二者独立，勿混淆。"
     },
@@ -93,7 +93,7 @@
       "compares": "蒸馏复刻校验：作者原文全文 vs 复刻 replica 全文--cosine 相似度换算成 SFS 0-100 分制的线性公式",
       "pinned_by_tests": [],
       "marker_lines": [
-        100
+        98
       ],
       "note": "与 sfs_calibration_probe.py 里完全相同的公式重复一份（未提取共享函数）；线性映射未必是最佳映射（业界常用 sigmoid/百分位映射），Wave-6 校准应统一处理，改一处两处都要改。"
     },
@@ -109,7 +109,7 @@
       "compares": "SFS 校准探针：text_a vs text_b（同作者/跨作者样本对）--cosine 相似度换算成 0-100 分制的线性公式，供 same/cross 分布可分性验证",
       "pinned_by_tests": [],
       "marker_lines": [
-        118
+        114
       ],
       "note": "与 sfs_axis_decomposer.py 公式重复（见该条 note）。本文件是唯一直接服务于 same-author vs cross-author 可分性测量 的探针脚本，是 W6-B 校准 harness 最可能复用的现成基座。"
     },

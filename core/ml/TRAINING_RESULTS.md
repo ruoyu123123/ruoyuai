@@ -12,7 +12,7 @@
 | 质量AI腔判别 | `quality_clf/runs/macbert_v1` | val AUC **1.0**（3 epoch 全 1.0） | — | ⚠️ **过拟合·不可部署** |
 
 ## ⚠️ 质量AI腔判别为何不可部署（诚实）
-val AUC=1.0 是**捷径学习铁证**：负样本仅 637 个 gemini 复刻样本(单生成器·都模仿这 10 作者)→ 模型完美分开但学的是「gemini 指纹+特定分布」非「通用 AI 腔」。换 DeepSeek/豆包/Qwen 必崩(arXiv:2509.00731 跨生成器塌到 76%)。**真泛化路径**：`gen_negatives.py` 多生成器(需加 DeepSeek/Qwen profile)补负样本到数千 + 拉 C-ReD 辅助迁移。当前模型当 held-out 对抗硬集种子·不上线。
+val AUC=1.0 是**捷径学习铁证**：负样本仅 637 个 gemini 复刻样本(单生成器·都模仿这 10 作者)→ 模型完美分开但学的是「gemini 指纹+特定分布」非「通用 AI 腔」。换 DeepSeek/豆包/Qwen 必崩(arXiv:2509.00731 跨生成器塌到 76%)。**真泛化路径**：外部多生成器负样本(经 `data_prep.py --ai-extra-dir` ingest·文件名 `<author>__<generator>__NN.txt`)补到数千 + 拉 C-ReD 辅助迁移。当前模型当 held-out 对抗硬集种子·不上线。
 
 ## 🔴 集成架构现状（2026-06-30 已接入）
 若渝主流水线跑在**系统 Python 3.14（无 torch）**，模型在 **venv Python 3.10（torch CUDA）**——两进程隔离。集成采用 **subprocess 推理桥**：若渝 scanner 批量调 `core/ml/.venv/Scripts/python.exe <infer>.py --batch in.jsonl --out out.jsonl`（cluster 级批量·非实时·可接受）。创作入口 `audit_hub.main()` / `save_state.main()` 经 `nn_runtime_defaults.enable_creative_nn_defaults()` 默认开启模型/可成长门控：NN 推理桥 + `FeatureStore` + `DataFlywheel` + `ModelRegistry`。

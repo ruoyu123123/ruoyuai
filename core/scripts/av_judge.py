@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""av_judge.py — AV-judge 解耦特质·作者验证（读者视角配对判别 · advisory）
+"""av_judge.py — AV-judge 解耦特质·作者验证确定性层（配对判别 rubric 单一真理源 · advisory）
 
-【是什么】Author-Verification judge：喂 1 段**作者原文** + 1 段**仿写**，要求 gen-model
-  **逐维度配对判别**——把 A（作者）当锚、B（仿写）当待验，逐维点名「B 在哪个维度露馅
+【是什么】Author-Verification 判别的**纯确定性库**：给 1 段**作者原文** + 1 段**仿写**，
+  渲染**逐维度配对判别** prompt——把 A（作者）当锚、B（仿写）当待验，逐维点名「B 在哪个维度露馅
   （走味，读起来不像作者）」。4 个解耦特质维度（authorship verification 文献的
   stylometric 拆解 · 不混在一起打一个总分）：
 
@@ -20,79 +20,48 @@
   AV-judge 站中间：**读者视角** + **解耦 4 维** + **配对判别**（A 锚 B 验，比绝对打分可靠——
   Catch Me If You GAN / Are We There Yet 等实证：LLM 对单段绝对风格打分方差大，配对相对判别稳）。
 
-【自一致性重采样（Rating Roulette · 稳方差）】
-  即便配对相对判别，单次 LLM-judge 仍有方差（同一对 A/B 跑两次可能一次走味一次命中）。故
-  同 judge model 跑 N 次重采样（temperature 微抖 · env AV_JUDGE_N_SAMPLES 默认 3 · 设 1 关），
-  4 维**各取多数票**做 robust 聚合 + 暴露方差（agreement / unstable_dims · advisory 不黑箱）。
-  无需 logprob（黑箱模型可用）· 平票偏命中（保守不误伤真作者）· 永远 advisory 永不 hard_gate。
+【执行分工（scene_jobs 范式 · 本模块零模型调用）】
+  判别由 novel-av-judge agent 亲笔完成，本模块只做确定性层：
+  · distill_av_verify.py 用 build_av_judge_prompt 渲染投票任务 prompt（每配对 N 票 ·
+    env AV_JUDGE_N_SAMPLES 默认 3 · AV_JUDGE_POSITION_SWAP=on 时半数任务换序呈现），
+    写 av_judge_jobs.json manifest 供主代理 spawn novel-av-judge 补件；
+  · novel-av-judge 逐票**独立**判别，verdict JSON 落盘；
+  · 本模块 parse_av_verdicts 逐票解析 → aggregate_verdicts 4 维**各取多数票** robust 聚合
+    （平票偏命中 · 方差透明 agreement / unstable_dims）→ build_report 组装 advisory 报告。
 
 【配对判别 > 绝对打分】(authorship verification 范式)
   不问「B 像不像作者（打 1-10）」，问「给定 A 是作者真迹，B 在哪几维露馅」——
-  相对锚定把「这个作者基线长什么样」交给样本 A 决定，绕开 LLM 对网文隐性风格的绝对标尺漂移。
+  相对锚定把「这个作者基线长什么样」交给样本 A 决定，绕开 LLM-judge 对网文隐性风格的绝对标尺漂移。
 
 【绝不 hard_gate】(北极星⑤ + 共同纪律 2)
   实证（Catch Me If You GAN / Are We There Yet On Detecting LLM Texts）：LLM-judge 对网文
-  隐性风格会**失准**——创意写作域约 1/4 难例判别翻转。故：
-    · 永远 advisory，code AV_TRAIT_DRIFT **绝不进 audit_hub.HARD_GATE_CODES**。
-    · env AV_JUDGE_MODE 控制（默认 active）：
-        off：完全跳过——不构 prompt、不调 gen-model（无 gen-model 配置/离线环境的逃生口）。
-        shadow：构 prompt + 调 gen-model + 出 4 维 advisory，但**只记录**（report.shadow=True ·
-                顶层 verdict=None · 不上报 audit_hub）→ 与 SFS / 人评做三方对照校准用。
-        active（默认）：走味维度作为 advisory 待裁决项上报（仍 advisory · 仍可豁免 · 永不 hard_gate）。
+  隐性风格会**失准**——创意写作域约 1/4 难例判别翻转。故永远 advisory：
+  code AV_TRAIT_DRIFT **绝不进 audit_hub.HARD_GATE_CODES**，走味维度只作 advisory
+  待裁决项上报（仍可豁免），结论不改变 SFS 收敛闸或任何 hard_gate。
 
-【复用 · 薄】(北极星⑥ 别臃肿)
-  · 纯 prompt + 薄 Python，gen-model 调用复用 gen_model_loader 同款 fallback 管线
-    （与 distill_replicate.call_gen_model 一致的 active→fallback 链 · 不另起调用栈）。
-  · 零新依赖（stdlib + openai/​dotenv 已是 gen_model 栈既有）· 零 GPU。
-  · `/distill-style` 和 `/distill-style-skillopt` 的最终复刻验证步骤在 SFS 之外 required 调用本工具；
-    结论只作为作者辨识度 advisory 报告，不改变 SFS 收敛闸或 hard_gate。
-
-用法：
-  python av_judge.py \\
-    --author workspace/styles/蛊真人/原文/第010章.txt \\
-    --replica workspace/styles/蛊真人/复刻测试/v7_round1/cluster_001_replica.txt \\
-    [--out report.json]
-  AV_JUDGE_MODE=off → 直接打印 skipped 报告退出 0。
-
-测试只验确定性层（prompt 构造 + rubric + 配对结构 + off 默认）· 不实跑 gen-model（需 API）。
+`/distill-style` 和 `/distill-style-skillopt` 的复刻验证步骤经 distill_av_verify.py
+required 消费本模块；测试只验确定性层（rubric / prompt 构造 / 解析 / 聚合 / 报告）。
 """
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import sys
-import time
 from pathlib import Path
-
-# 复用 gen_model_loader 管线（薄复用 · 不另起调用栈 · 北极星⑥）
-_SCRIPT_DIR = Path(__file__).resolve().parent
-if str(_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(_SCRIPT_DIR))
-from gen_model_loader import (  # noqa: E402
-    GenModelLoader,
-    GenModelConfigError,
-    GenModelExhaustedError,
-    Profile,
-    reasoning_extra_body,
-)
 
 # advisory 专用 issue code · ⚠️ 绝不进 audit_hub.HARD_GATE_CODES（北极星⑤ · 共同纪律 2）
 ISSUE_CODE = "AV_TRAIT_DRIFT"
 
-# ── 自一致性重采样（Rating Roulette · 稳 LLM-judge 方差）─────────────────
+# ── 自一致性投票（self-consistency · 稳单次判别方差）─────────────────
 # 根因（arxiv 实证）：LLM-judge 对网文隐性风格会失准（创意写作域约 1/4 难例翻转），单次配对
-#   判别方差大，同一对 (A,B) 跑两次可能一次判「走味」一次判「命中」。治法 = Rating Roulette /
-#   self-consistency：同 judge model 跑 N 次重采样（temperature 微抖），4 维**各取多数票**做
-#   robust 聚合，把单次噪声平滑掉。
-# env AV_JUDGE_N_SAMPLES：默认 3（质量优先 · N≥2 真聚合生效）· 设 1 = 关（退回单次单采样 ·
-#   零回归逃生口）· 钳到 [1, AV_JUDGE_N_SAMPLES_MAX]（防 token / 时延失控）。
+#   判别方差大，同一对 (A,B) 判两次可能一次「走味」一次「命中」。治法 = self-consistency：
+#   同一配对渲染 N 个独立投票任务（novel-av-judge 逐票独立判别 · 不许互相参考），
+#   4 维**各取多数票**做 robust 聚合，把单次噪声平滑掉。
+# env AV_JUDGE_N_SAMPLES：默认 3（质量优先 · N≥2 真聚合生效）· 设 1 = 关（退回单票 ·
+#   关聚合逃生口）· 钳到 [1, AV_JUDGE_N_SAMPLES_MAX]（防投票任务数失控）。
 # ⚠️ 仍 advisory：聚合只稳方差、不强判——多数票 + 方差透明上报，仍可豁免、永不 hard_gate。
 AV_JUDGE_N_SAMPLES_DEFAULT = 3
 AV_JUDGE_N_SAMPLES_MAX = 7
-# 每次重采样在 profile 基准 temperature 上的抖动量（Rating Roulette 微抖 · 制造采样多样性
-#   又不让判别失稳）。第 0 次用基准温度，之后按 ±step 交替抖。
-AV_JUDGE_TEMP_JITTER_STEP = 0.15
 
 # 走味判定阈值：维度判别 verdict ∈ {命中, 走味}；命中 = 读者认得出是作者，走味 = 露馅。
 # 这是**读者视角的定性判别**（不是 1-10 打分），阈值即「这一维 LLM 判定走味」。
@@ -151,26 +120,11 @@ def _active_dims(include_intent_dim: bool = False) -> list:
     return AV_TRAIT_DIMS + ([INTENT_DIM] if include_intent_dim else [])
 
 
-def _av_judge_mode() -> str:
-    """读 env AV_JUDGE_MODE：默认 active / shadow / off。
-
-    active（默认）：构 prompt + 调 gen-model + 4 维配对判别 · 走味维度作 advisory 待裁决项上报
-      （仍 advisory · 仍可豁免 · code AV_TRAIT_DRIFT 永不进 HARD_GATE_CODES）。LLM-judge 对网文
-      隐性风格会失准（创意写作域约 1/4 难例翻转）→ 故必 advisory + 报告显式标注「建议人工复核」，
-      绝不黑箱判决、绝不误伤真作者。
-    shadow：构 prompt + 调 gen-model + 出 4 维 advisory，但只记录（不上报 audit_hub · 先校准）。
-    off：完全跳过——不构 prompt、不调 gen-model（无 gen-model 配置/离线环境的逃生口）。
-
-    空 / 非法值 → active（放量默认）。
-    """
-    m = (os.environ.get("AV_JUDGE_MODE") or "active").strip().lower()
-    return m if m in ("shadow", "active", "off") else "active"
-
-
 def _n_samples() -> int:
-    """读 env AV_JUDGE_N_SAMPLES：默认 3（N≥2 真聚合稳方差）· 1=关（退回单次）· 钳到 [1, MAX]。
+    """读 env AV_JUDGE_N_SAMPLES：默认 3（N≥2 真聚合稳方差）· 1=关（退回单票）· 钳到 [1, MAX]。
 
-    空 / 非法值 → 默认 3。< 1 钳到 1（=关闭聚合，退回单采样，零回归）；> MAX 钳到 MAX。
+    空 / 非法值 → 默认 3。< 1 钳到 1（=关闭聚合，退回单票）；> MAX 钳到 MAX。
+    值 = distill_av_verify 为同一配对渲染的投票任务数（novel-av-judge 逐票独立判别）。
     """
     raw = (os.environ.get("AV_JUDGE_N_SAMPLES") or "").strip()
     if not raw:
@@ -187,10 +141,9 @@ def _n_samples() -> int:
 def _position_swap_on() -> bool:
     """读 env AV_JUDGE_POSITION_SWAP：默认 **off**（G2-CYCLIC 去位置偏 · experiment）。
 
-    position-swap 去偏的**有效性需 API 离线对称性闸验证**（本机验证不了），故默认 off →
-      现有 active 行为**完全零回归**（swap 默认关 · self_consistency_judge 全 swap=False）。
-      只有显式 AV_JUDGE_POSITION_SWAP=on（experiment）才在 N 采样里半数样本 swap。
-      N=1 时即便 on 也退化为 0 个 swap（零回归）。
+    position-swap 去偏的**有效性需离线对称性闸验证**（本机验证不了），故默认 off →
+      全部投票任务原向呈现。只有显式 AV_JUDGE_POSITION_SWAP=on（experiment）才在
+      N 个投票任务里给后一半分配 swap（_swap_assignment）。N=1 时即便 on 也退化为 0 个 swap。
 
     认 on / 1 / true / yes（大小写不敏感）为开；其余（含空 / 非法）为 off。
     """
@@ -212,7 +165,7 @@ def _intent_dim_on() -> bool:
 
 
 def _swap_assignment(n: int, swap_on: bool) -> list[bool]:
-    """为 n 次重采样分配 swap 方向（前一半 False · 后一半 True · 最大化位置对称采样）。
+    """为 n 个投票任务分配 swap 方向（前一半 False · 后一半 True · 最大化位置对称采样）。
 
     · swap_on=False → 全 False（零回归 · 原向）。
     · swap_on=True 且 n≥2 → 前 ceil(n/2) 个 False、后 floor(n/2) 个 True
@@ -225,25 +178,6 @@ def _swap_assignment(n: int, swap_on: bool) -> list[bool]:
         return [False] * n
     half = (n + 1) // 2  # 前一半（含取整偏前）不 swap
     return [i >= half for i in range(n)]
-
-
-def _jittered_temperatures(base: float, n: int) -> list[float]:
-    """为 n 次重采样生成 temperature 序列（Rating Roulette 微抖 · 制造采样多样性）。
-
-    第 0 次用基准温度（保留单次行为的可复现性）；之后按 +step / -step 交替抖，钳到 [0, 1.5]。
-    确定性纯函数（不随机）→ 测试可断言序列；既造多样性又不让判别失稳。
-    """
-    base = float(base if base is not None else 0.8)
-    temps: list[float] = []
-    for i in range(max(1, n)):
-        if i == 0:
-            t = base
-        else:
-            # i=1 → +step, i=2 → -step, i=3 → +2step, i=4 → -2step ...
-            mag = ((i + 1) // 2) * AV_JUDGE_TEMP_JITTER_STEP
-            t = base + mag if (i % 2 == 1) else base - mag
-        temps.append(round(max(0.0, min(1.5, t)), 3))
-    return temps
 
 
 # ════════════════════════════════════════════════════════════════
@@ -284,15 +218,15 @@ def build_av_judge_prompt(author_text: str, replica_text: str,
                           include_intent_dim: bool = False) -> str:
     """构造 AV-judge 配对判别 prompt：作者真迹（锚）vs 仿写（待验）· 解耦维度 · 读者视角。
 
-    确定性纯函数（不调 gen-model）——测试只验此处的配对结构 + rubric + 输出 JSON 契约。
+    确定性纯函数（零模型调用）——测试只验此处的配对结构 + rubric + 输出 JSON 契约。
 
     swap（G2-CYCLIC 去位置偏 · experiment · 默认 False=原向零回归）：
       · False：作者真迹先呈现、仿写后呈现（规范朝向）。
       · True：**仅在 prompt 文本层反转两段的呈现顺序**（仿写先呈现、作者真迹后呈现），但
         rubric / verdict / 指证要求**始终锚到「仿写段」**（不绑字母槽），让 judge 始终判仿写走味。
         4 维输出 JSON schema（维度键名）**零变化**——下游 parse_av_verdicts 完全复用。
-      · 多 seed 只压随机噪声、压不掉 LLM 对配对判别的系统性位置偏（倾向判后呈现段更差）；
-        半数样本 swap 让走味维分布对「呈现顺序」不敏感（self_consistency_judge 分配）。
+      · 多票只压随机噪声、压不掉 LLM 对配对判别的系统性位置偏（倾向判后呈现段更差）；
+        半数投票任务 swap 让走味维分布对「呈现顺序」不敏感（_swap_assignment 分配）。
       · ⚠️ swap 只去**位置偏**，**不去 familiarity 偏**（judge 对同源 gemini 稿的熟悉度偏好）——
         见报告 position_bias_note，绝不宣称消除自偏。
 
@@ -366,70 +300,7 @@ def build_av_judge_prompt(author_text: str, replica_text: str,
 
 
 # ════════════════════════════════════════════════════════════════
-# gen-model 调用（薄复用 gen_model_loader · 与 distill_replicate 同款 fallback 管线）
-# ════════════════════════════════════════════════════════════════
-
-def call_gen_model(loader: GenModelLoader, system: str, user: str,
-                   default_max_tokens: int = 1500,
-                   tag: str = "av_judge") -> tuple[str, Profile, float]:
-    """调当前 active profile，失败按 fallback 链尝试。返回 (text, profile, elapsed)。
-
-    与 distill_replicate.call_gen_model 同款 active→fallback 链——不另起调用栈（北极星⑥）。
-    判别只需短输出（4 维 JSON），default_max_tokens 比复刻小。
-    """
-    from openai import OpenAI
-
-    candidates = loader.get_callable_profiles()
-    failures: list[tuple[str, str]] = []
-    prefix = f"[{tag}] " if tag else ""
-
-    for i, profile in enumerate(candidates):
-        max_tokens = profile.max_tokens or default_max_tokens
-        if i == 0:
-            print(f"{prefix}[av_judge] 调用 active: {profile.name} ({profile.model})", file=sys.stderr)
-        else:
-            print(f"\n{prefix}[FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
-
-        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
-        full_text = ""
-        t0 = time.time()
-        _xb = reasoning_extra_body(profile)  # reasoning 控制(elysiver reasoning_effort/pie-xian thinking_level)·防 thinking 暴走
-        try:
-            stream = client.chat.completions.create(
-                model=profile.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=max_tokens,
-                temperature=profile.temperature,
-                stream=True,
-                **({"extra_body": _xb} if _xb else {}),
-            )
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                piece = getattr(delta, "content", None)
-                if piece:
-                    full_text += piece
-                    sys.stderr.write(piece)
-                    sys.stderr.flush()
-        except Exception as e:  # noqa: BLE001 — fallback 链需吞任意 provider 异常
-            reason = str(e)[:200]
-            print(f"\n{prefix}[FALLBACK] {profile.name} 失败: {reason}", file=sys.stderr)
-            failures.append((profile.name, reason))
-            continue
-
-        elapsed = time.time() - t0
-        print(f"\n{prefix}[av_judge] 接收完毕 ({len(full_text)} chars, {elapsed:.1f}s) via {profile.name}")
-        return full_text, profile, elapsed
-
-    raise GenModelExhaustedError(failures)
-
-
-# ════════════════════════════════════════════════════════════════
-# 解析 LLM 回复 → 4 维 advisory
+# 解析 verdict 回复 → 4 维 advisory
 # ════════════════════════════════════════════════════════════════
 
 def _extract_json(text: str) -> dict:
@@ -611,109 +482,6 @@ def aggregate_verdicts(samples: list[dict]) -> dict:
     }
 
 
-def self_consistency_judge(loader: "GenModelLoader", author_text: str, replica_text: str,
-                           sample_limit: int = 3000, n_samples: int | None = None,
-                           tag: str = "av_judge", swap_on: bool | None = None,
-                           include_intent_dim: bool = False,
-                           force_swap: bool | None = None) -> dict:
-    """同 judge model 跑 N 次重采样（temperature 微抖 + 半数 position-swap）→ 多数票聚合（Rating Roulette）。
-
-    这是 av_judge 的**自一致性核心**：稳住单次 LLM-judge 的方差。N=1 时退化为单次单采样
-    （关闭聚合的逃生口）。
-
-    G2-CYCLIC 半数 swap（experiment · AV_JUDGE_POSITION_SWAP=on 才开 · 默认 off=全 swap=False 零回归）：
-      · swap_on=None → 读 env _position_swap_on()（默认 off）。
-      · on 时 N 采样里前一半原向 / 后一半 swap（_swap_assignment）——在**不增调用次数**的现有 N 采样里
-        分配 swap（520 友好 · 复用基建），最大化位置对称采样去 judge 位置偏。N=1 恒不 swap（零回归）。
-      · 走味语义已锚到「仿写段」（不绑字母槽 · 见 build_av_judge_prompt swap）→ swap 样本 drift_dims
-        方向天然一致，聚合无需翻转；_swapped 标志仅供透明上报（aggregate_verdicts 平铺 n_swapped_samples）。
-
-    include_intent_dim（intent_recovery · experiment · 默认 False）：透传给 build_av_judge_prompt
-      追加「作者思维」第 5 维（仅 advisory 文本 · 不进 parse 聚合 · 真判决交 mstyle 余弦）。
-
-    force_swap（S7 换序双跑协议 · 默认 None=零回归）：非 None 时**整跑锁定一个呈现方向**
-      （False=全正向 / True=全反向），覆盖 swap_on 半 swap 分配——供 pairwise_drift_count 的换序双跑
-      一致性协议分别跑「正向整跑」和「反向整跑」再比对结论。None（默认）走 _swap_assignment
-      半 swap 逻辑。判定 prompt 复用 build_av_judge_prompt 既有 swap 参数（身份标签不变只换
-      呈现顺序）。
-
-    实现（薄复用 · 北极星⑥）：
-      · build_av_judge_prompt 按 swap 方向构（swap-off / swap-on 各构一次 · 缓存复用 · 省 token）。
-      · 复用 call_gen_model（签名不变 → 既有 mock 兼容）；temperature 抖动通过临时改写候选
-        profile.temperature 实现（call_gen_model 内部读 profile.temperature），跑完恢复。
-      · 每次回复 parse_av_verdicts → 打 _swapped 标志 → aggregate_verdicts 多数票聚合。
-
-    返回 aggregate_verdicts(...) 的结果，外加 error（任一/全部采样失败时聚合仍尽力 · 全失败才
-    error 非空 + drift_dims 空）。advisory 永不抛错中断流水线（北极星⑤）。
-    """
-    n = n_samples if n_samples is not None else _n_samples()
-    n = max(1, n)
-    if force_swap is None:
-        swap_on = _position_swap_on() if swap_on is None else swap_on
-        swaps = _swap_assignment(n, swap_on)
-    else:
-        # S7 换序双跑：整跑锁定一个呈现方向（正向跑全 False / 反向跑全 True）。
-        # 不与半 swap 分配混用——双跑本身就是位置对称采样的更强形态（跑级对称 > 样本级对称）。
-        swaps = [bool(force_swap)] * n
-
-    # prompt 按 swap 方向构（最多两种 · 缓存复用省 token）
-    _prompt_cache: dict[bool, str] = {}
-
-    def _prompt_for(sw: bool) -> str:
-        if sw not in _prompt_cache:
-            _prompt_cache[sw] = build_av_judge_prompt(
-                author_text, replica_text, sample_limit, swap=sw,
-                include_intent_dim=include_intent_dim)
-        return _prompt_cache[sw]
-
-    # 取基准 temperature（候选 profile 的第一档 · 缺则 0.8）做抖动序列
-    candidates = []
-    try:
-        candidates = list(loader.get_callable_profiles())
-    except Exception:  # noqa: BLE001 — 取不到候选不致命，后续 call_gen_model 自会报错
-        candidates = []
-    base_temp = candidates[0].temperature if candidates else 0.8
-    temps = _jittered_temperatures(base_temp, n)
-
-    samples: list[dict] = []
-    failures: list[str] = []
-    for i, (temp, sw) in enumerate(zip(temps, swaps)):
-        user_prompt = _prompt_for(sw)
-        # temperature 微抖：临时改写候选 profile 温度（call_gen_model 内部读 profile.temperature）
-        saved = [(p, getattr(p, "temperature", None)) for p in candidates]
-        for p in candidates:
-            try:
-                p.temperature = temp
-            except Exception:  # noqa: BLE001 — profile 不可写则跳过抖动（不致命）
-                pass
-        try:
-            reply, _profile, _elapsed = call_gen_model(
-                loader, AV_JUDGE_SYSTEM_PROMPT, user_prompt, tag=f"{tag}_sc{i + 1}")
-            parsed = parse_av_verdicts(reply)
-            parsed["_swapped"] = sw   # G2-CYCLIC 透明：标记该样本呈现方向（聚合不翻转·仅上报）
-            samples.append(parsed)
-        except GenModelExhaustedError as e:
-            failures.append(f"sample{i + 1}: gen-model 全部失败 {str(e)[:120]}")
-        except Exception as e:  # noqa: BLE001 — advisory 永不中断
-            failures.append(f"sample{i + 1}: {str(e)[:120]}")
-        finally:
-            for p, t in saved:  # 恢复原温度（不污染 loader 给后续调用）
-                try:
-                    p.temperature = t
-                except Exception:  # noqa: BLE001
-                    pass
-
-    agg = aggregate_verdicts(samples)
-    # 全部采样失败 → error 非空（调用方据此降级）；部分失败聚合仍尽力，只记 partial 警告
-    if not samples:
-        agg["error"] = "; ".join(failures) or "无有效采样"
-    else:
-        agg["error"] = None
-        if failures:
-            agg["sample_failures"] = failures
-    return agg
-
-
 def build_report(mode: str, parsed: dict | None, author_path: str = "",
                  replica_path: str = "", profile_name: str | None = None,
                  elapsed: float | None = None, error: str | None = None) -> dict:
@@ -732,9 +500,9 @@ def build_report(mode: str, parsed: dict | None, author_path: str = "",
         "replica_path": replica_path,
         "profile_used": profile_name,
         "elapsed_seconds": round(elapsed, 1) if elapsed is not None else None,
-        "note": ("AV-judge 是顾问非法官 · 仅 advisory（可豁免）· 绝不 hard_gate · "
-                 "默认 off · shadow 先与 SFS/人评校准（LLM-judge 对网文隐性风格会失准 · "
-                 "创意写作域约 1/4 难例翻转）"),
+        "note": ("AV-judge 是顾问非法官 · 仅 advisory（可豁免）· 绝不 hard_gate"
+                 "（LLM-judge 对网文隐性风格会失准 · 创意写作域约 1/4 难例翻转 · "
+                 "建议人工复核走味维度）"),
     }
     if error:
         report["error"] = error
@@ -747,7 +515,7 @@ def build_report(mode: str, parsed: dict | None, author_path: str = "",
     report["dimensions"] = parsed["dimensions"]
     report["drift_dims"] = parsed["drift_dims"]
     report["parse_ok"] = parsed.get("parse_ok", False)
-    # 自一致性透明：N 次重采样多数票聚合时，把方差指标平铺进报告（advisory 不黑箱 · 复盘可核）。
+    # 自一致性透明：N 票多数票聚合时，把方差指标平铺进报告（advisory 不黑箱 · 复盘可核）。
     # G2-CYCLIC swap 透明（n_swapped_samples / position_bias_note / sample_drift_detail）一并平铺。
     for k in ("n_samples", "n_valid_samples", "mean_agreement", "unstable_dims",
               "agreement_by_dim", "sample_drift_dims", "sample_failures",
@@ -757,7 +525,7 @@ def build_report(mode: str, parsed: dict | None, author_path: str = "",
     if parsed.get("unstable_dims"):
         report["consistency_note"] = (
             f"自一致性聚合：{len(parsed['unstable_dims'])} 个维度在 "
-            f"{parsed.get('n_valid_samples', '?')} 次重采样中出现分歧（多数票裁定 · "
+            f"{parsed.get('n_valid_samples', '?')} 票判别中出现分歧（多数票裁定 · "
             "平票偏命中保守不误伤）· 建议人工复核走味维度")
     if shadow:
         # shadow：只记录 · 不出顶层 verdict（不上报 audit_hub）
@@ -779,256 +547,8 @@ def build_report(mode: str, parsed: dict | None, author_path: str = "",
     return report
 
 
-def _read_text(p: Path) -> str:
-    return p.read_text(encoding="utf-8")
-
-
-# ════════════════════════════════════════════════════════════════
-# best-of-N 复用接口（薄 · gen_writer 配对重排择优用 · 不另起调用栈 · 北极星⑥）
-# ════════════════════════════════════════════════════════════════
-
-# ── S7 换序双跑一致性协议（LongJudgeBench arXiv:2606.01629）─────────────
-# 实证：长文本配对评判的位置偏差严重——同一配对换序重判，不一致率可高达 78.7%。单向单判的
-#   配对结论里混着大量「换个呈现顺序就翻转」的假信号。治法 = 换序双跑一致性协议：
-#   · 双跑：同一配对跑两遍——正向整跑（作者真迹在前）+ 反向整跑（仿写在前 · 复用
-#     build_av_judge_prompt 既有 swap 参数 · 身份标签不变只换呈现顺序 · **判定 prompt 零改动**），
-#     各自走完整 self_consistency_judge N 采样多数票聚合。
-#   · 一致才采纳：两跑 drift_dims 集合完全一致 → 采纳（取正向跑结果 · 两跑同结论无折中之说）；
-#     不一致 → **弃票 = 无信号**（drift_count=None · 绝不折中平均/并集/交集造假信号污染飞轮），
-#     消费方（gen_writer.score_candidate）对 av_drift_count=None 走既有「缺 AV 信号」降级路径。
-#   · 留痕：order_consistency ∈ consistent|inconsistent|single_run + order_runs 两跑明细 +
-#     order_swap_stats 进程内不一致率累计（进 trace 供飞轮观察 judge 可靠性）。
-#   · env AV_JUDGE_ORDER_SWAP 默认 **on**（协议级可靠性加固该默认开 · 双跑=2× judge 调用 ·
-#     不抠 token 质量优先）；0/off/false/no → 单跑
-#     （调试/对照用 · 仅多一个 order_consistency="single_run" 留痕字段）。
-#   ⚠️ 仍 advisory：协议只提升配对信号可靠性，不改判定逻辑、不产 hard_gate、不否决任何稿。
-ORDER_CONSISTENT = "consistent"
-ORDER_INCONSISTENT = "inconsistent"
-ORDER_SINGLE_RUN = "single_run"
-
-# 进程内不一致率累计（只计完成双跑的配对 · 出错的配对不计入——未完成判定≠不一致）
-_ORDER_SWAP_STATS = {"pairs_total": 0, "pairs_consistent": 0, "pairs_inconsistent": 0}
-
-
-def _order_swap_on() -> bool:
-    """读 env AV_JUDGE_ORDER_SWAP：默认 **on**（S7 换序双跑 · 协议级可靠性加固该默认开）。
-
-    仅 0 / off / false / no（大小写不敏感）为关 → 单跑保持旧行为（调试/对照用途）；
-    其余（含空 / 未设 / 非法）一律 on。
-    """
-    v = (os.environ.get("AV_JUDGE_ORDER_SWAP") or "").strip().lower()
-    return v not in ("0", "off", "false", "no")
-
-
-def order_swap_stats() -> dict:
-    """进程内换序双跑不一致率统计快照（留痕进 trace · 飞轮观察 judge 可靠性）。
-
-    返回 {pairs_total, pairs_consistent, pairs_inconsistent, inconsistency_rate}。
-    inconsistency_rate = pairs_inconsistent / pairs_total（无完成配对时 None · 不臆造 0）。
-    """
-    total = _ORDER_SWAP_STATS["pairs_total"]
-    return {
-        **_ORDER_SWAP_STATS,
-        "inconsistency_rate": (round(_ORDER_SWAP_STATS["pairs_inconsistent"] / total, 3)
-                               if total else None),
-    }
-
-
-def reset_order_swap_stats() -> None:
-    """清零进程内不一致率统计（测试 / 新批次隔离用）。"""
-    for k in _ORDER_SWAP_STATS:
-        _ORDER_SWAP_STATS[k] = 0
-
-
-def pairwise_drift_count(loader: GenModelLoader, author_text: str, replica_text: str,
-                         sample_limit: int = 3000) -> dict:
-    """配对判别一段仿写 vs 作者真迹，返回走味维度计数（best-of-N 择优用 · advisory）。
-
-    这是 av_judge 给写作端 best-of-N 重排的**薄复用接口**——不走 CLI / 不读写文件，
-    直接拿 loader + 两段文本做 4 维配对判别，返回结构化结果给调用方做候选排序。
-
-    返回 {drift_count: int|None, drift_dims: [...], dimensions: {...}, parse_ok: bool,
-          error: str|None, order_consistency: str|None, ...}。
-      · drift_count = 走味维度数（0=四维全命中，最像作者；越大越不像 → best-of-N 越靠后）。
-      · 任何 gen-model 失败 → error 非空 + drift_count=None（调用方据此降级到纯 SFS 排序，
-        不阻断 · advisory 永不抛错中断写作流水线 · 北极星⑤）。
-
-    ⚠️ 永远 advisory：本函数只为「在 N 个候选里相对排序」服务，不产 hard_gate、不否决任何稿。
-    LLM-judge 对网文隐性风格会失准（创意写作域约 1/4 难例翻转），故只做 select 不做强判。
-
-    自一致性：内部走 self_consistency_judge（AV_JUDGE_N_SAMPLES 默认 3 次重采样 ·
-      4 维多数票聚合），稳住单次方差再交 best-of-N 排序。N=1（env 设）退化为单次（零回归）。
-
-    S7 换序双跑一致性协议（LongJudgeBench arXiv:2606.01629 · env AV_JUDGE_ORDER_SWAP
-      默认 on）：正向 + 反向各整跑一遍，两跑 drift_dims 一致才采纳（order_consistency=
-      "consistent"）；不一致 = 弃票（drift_count=None + error=None → 走调用方既有「缺 AV 信号」
-      降级路径 · order_consistency="inconsistent" · 绝不折中平均）。AV_JUDGE_ORDER_SWAP=0 →
-      单跑（order_consistency="single_run" 仅留痕）。
-      order_swap_stats 字段携带进程内不一致率累计（供 trace / 飞轮观察 judge 可靠性）。
-    """
-    # ── 单跑（AV_JUDGE_ORDER_SWAP=0 · 调试/对照）：仅加 order_consistency 留痕字段 ──
-    if not _order_swap_on():
-        agg = self_consistency_judge(loader, author_text, replica_text, sample_limit,
-                                     tag="av_judge_bestofn")
-        if agg.get("error"):
-            return {"drift_count": None, "drift_dims": [], "dimensions": {},
-                    "parse_ok": False, "error": agg["error"][:200],
-                    "order_consistency": ORDER_SINGLE_RUN}
-        return {
-            "drift_count": len(agg["drift_dims"]),
-            "drift_dims": agg["drift_dims"],
-            "dimensions": agg["dimensions"],
-            "parse_ok": agg["parse_ok"],
-            "error": None,
-            # 方差透明（调用方可据 mean_agreement 判这次排序信号稳不稳）
-            "n_valid_samples": agg.get("n_valid_samples"),
-            "mean_agreement": agg.get("mean_agreement"),
-            "unstable_dims": agg.get("unstable_dims", []),
-            "order_consistency": ORDER_SINGLE_RUN,
-        }
-
-    # ── S7 双跑：正向整跑（作者真迹在前）→ 反向整跑（仿写在前 · 身份标签不变）──
-    fwd = self_consistency_judge(loader, author_text, replica_text, sample_limit,
-                                 tag="av_judge_bestofn_fwd", force_swap=False)
-    if fwd.get("error"):
-        # 正向已无信号 → 短路不烧反向调用（缺任一跑都凑不齐双跑一致 · 出错配对不计入不一致率）
-        return {"drift_count": None, "drift_dims": [], "dimensions": {},
-                "parse_ok": False, "error": fwd["error"][:200],
-                "order_consistency": None,
-                "order_swap_stats": order_swap_stats()}
-    rev = self_consistency_judge(loader, author_text, replica_text, sample_limit,
-                                 tag="av_judge_bestofn_rev", force_swap=True)
-    if rev.get("error"):
-        return {"drift_count": None, "drift_dims": [], "dimensions": {},
-                "parse_ok": False, "error": rev["error"][:200],
-                "order_consistency": None,
-                "order_swap_stats": order_swap_stats()}
-
-    # 一致性判据：两跑走味维度**集合**完全一致（维度级结论 · 比 count 相等更严——
-    # 「数相同但维不同」是巧合不是一致）。
-    consistent = set(fwd["drift_dims"]) == set(rev["drift_dims"])
-    _ORDER_SWAP_STATS["pairs_total"] += 1
-    _ORDER_SWAP_STATS["pairs_consistent" if consistent else "pairs_inconsistent"] += 1
-
-    # 两跑明细留痕（复盘可核 · 不黑箱）
-    order_runs = {
-        "forward": {"drift_dims": fwd["drift_dims"],
-                    "n_valid_samples": fwd.get("n_valid_samples"),
-                    "mean_agreement": fwd.get("mean_agreement")},
-        "reversed": {"drift_dims": rev["drift_dims"],
-                     "n_valid_samples": rev.get("n_valid_samples"),
-                     "mean_agreement": rev.get("mean_agreement")},
-    }
-
-    if not consistent:
-        # 弃票：不一致 = 无信号。绝不折中平均 / 并集 / 交集造假信号污染飞轮——
-        # error=None + drift_count=None → gen_writer.score_candidate 既有降级路径（纯 SFS 排序）。
-        return {"drift_count": None, "drift_dims": [], "dimensions": {},
-                "parse_ok": bool(fwd.get("parse_ok") and rev.get("parse_ok")),
-                "error": None,
-                "order_consistency": ORDER_INCONSISTENT,
-                "order_runs": order_runs,
-                "order_swap_stats": order_swap_stats()}
-
-    # 一致：采纳正向跑结果（两跑同结论 · 正向 = 规范朝向 · 维度明细取正向）
-    return {
-        "drift_count": len(fwd["drift_dims"]),
-        "drift_dims": fwd["drift_dims"],
-        "dimensions": fwd["dimensions"],
-        "parse_ok": fwd["parse_ok"],
-        "error": None,
-        "n_valid_samples": fwd.get("n_valid_samples"),
-        "mean_agreement": fwd.get("mean_agreement"),
-        "unstable_dims": fwd.get("unstable_dims", []),
-        "order_consistency": ORDER_CONSISTENT,
-        "order_runs": order_runs,
-        "order_swap_stats": order_swap_stats(),
-    }
-
-
-# ════════════════════════════════════════════════════════════════
-# main
-# ════════════════════════════════════════════════════════════════
-
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="AV-judge 解耦特质·作者验证（配对判别 · 读者视角 · advisory）",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("--author", required=True, help="作者真迹文本路径（锚）")
-    parser.add_argument("--replica", required=True, help="仿写文本路径（待验证）")
-    parser.add_argument("--out", help="报告 JSON 输出路径（缺省打印到 stdout）")
-    parser.add_argument("--sample-limit", type=int, default=3000,
-                        help="每段送审字数上限（默认 3000 · 配对判别只需足量语感样本）")
-    parser.add_argument("--position-swap", action="store_true",
-                        help="G2-CYCLIC 去位置偏（experiment · 半数样本反转呈现顺序 · 等价 AV_JUDGE_POSITION_SWAP=on）")
-    parser.add_argument("--intent-dim", action="store_true",
-                        help="intent_recovery 加「作者思维」第 5 维（experiment · 仅 advisory 文本 · 等价 AV_JUDGE_INTENT_DIM=on）")
-    parser.add_argument("--required-run", action="store_true",
-                        help="required 验证步骤：即使环境模式为 off 也执行 active advisory 判别；"
-                             "输入/报告/判别执行失败时退出 2，但走味结论仍不阻断")
-    args = parser.parse_args()
-
-    mode = "active" if args.required_run else _av_judge_mode()
-    n_samples = _n_samples()
-    swap_on = _position_swap_on() or args.position_swap
-    intent_on = _intent_dim_on() or args.intent_dim
-    print(f"[av_judge] AV_JUDGE_MODE = {mode}"
-          f"（{'完全跳过 · 零回归' if mode == 'off' else 'shadow 只记录 · 不上报' if mode == 'shadow' else 'active · 走味维度作 advisory 上报'}）"
-          f" · AV_JUDGE_N_SAMPLES = {n_samples}"
-          f"（{'单次 · 关聚合' if n_samples == 1 else f'{n_samples} 次重采样多数票聚合稳方差'}）"
-          f" · position_swap = {'on（G2-CYCLIC 半 swap · experiment）' if swap_on else 'off（零回归）'}"
-          f" · intent_dim = {'on（第5维 · experiment）' if intent_on else 'off（默认4维）'}")
-
-    # off：完全跳过——不构 prompt、不调 gen-model（共同纪律 2 · 零回归）
-    if mode == "off":
-        report = build_report("off", None, args.author, args.replica)
-        report["skipped"] = True
-        report["verdict"] = None  # 跳过 = 未判别 · 不报 match（off 报告不暗示真判决）
-        report["issues"] = []
-        _emit(report, args.out)
-        return 0
-
-    author_path, replica_path = Path(args.author), Path(args.replica)
-    for p, label in ((author_path, "作者真迹"), (replica_path, "仿写")):
-        if not p.exists():
-            print(f"[ERROR] {label}文件不存在: {p}", file=sys.stderr)
-            return 2
-
-    author_text = _read_text(author_path)
-    replica_text = _read_text(replica_path)
-
-    loader = GenModelLoader()
-    try:
-        active = loader.get_active_profile()
-        print(f"[av_judge] active profile = {active.name} ({active.model})", file=sys.stderr)
-    except GenModelConfigError as e:
-        # 配置缺失：advisory 层不阻断流水线——出 error 报告退 0（共同纪律 · 失败不中断）
-        report = build_report(mode, None, str(author_path), str(replica_path),
-                              error=f"gen-model 配置错误: {e}")
-        _emit(report, args.out)
-        return 2 if args.required_run else 0
-
-    # 自一致性：N 次重采样 + 多数票聚合（AV_JUDGE_N_SAMPLES 默认 3 · 1=退回单次）
-    #   + G2-CYCLIC 半数 swap（swap_on · experiment · 默认 off 零回归）+ intent_dim（intent_on · 仅 advisory 文本）
-    t0 = time.time()
-    agg = self_consistency_judge(loader, author_text, replica_text,
-                                 args.sample_limit, n_samples=n_samples, tag="av_judge",
-                                 swap_on=swap_on, include_intent_dim=intent_on)
-    elapsed = time.time() - t0
-    if agg.get("error"):
-        report = build_report(mode, None, str(author_path), str(replica_path),
-                              error=f"gen-model 全部失败: {str(agg['error'])[:300]}")
-        _emit(report, args.out)
-        return 2 if args.required_run else 0
-
-    report = build_report(mode, agg, str(author_path), str(replica_path),
-                          profile_name=active.name, elapsed=elapsed)
-    _emit(report, args.out)
-    return 0
-
-
 def _emit(report: dict, out: str | None) -> None:
+    """advisory 报告落盘（out 为空则打印 stdout）。"""
     blob = json.dumps(report, ensure_ascii=False, indent=2)
     if out:
         op = Path(out)
@@ -1037,10 +557,3 @@ def _emit(report: dict, out: str | None) -> None:
         print(f"[av_judge] 报告写入: {op}", file=sys.stderr)
     else:
         print(blob)
-
-
-if __name__ == "__main__":
-    for _s in (sys.stdout, sys.stderr):
-        if hasattr(_s, "reconfigure"):
-            _s.reconfigure(encoding="utf-8", errors="replace")
-    sys.exit(main())

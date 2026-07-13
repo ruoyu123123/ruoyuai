@@ -6,7 +6,7 @@
 每场必有一条价值轴（生/死 · 信任/背叛 · 自由/束缚 …），start_polarity 与
 end_polarity 必须翻转或递进（不能持平）· LLM 默认 neutral→neutral 没有翻转。
 
-【做法 · 占位 · av_judge 二阶验证 defer】
+【做法 · 确定性 storyboard 字段校验】
   · 输入：cluster brief.json 的 scene_storyboard
   · 校验：每 scene 有 (value_axis, start_polarity, end_polarity) 三字段
   · 五档：strongly_positive / positive / neutral / negative / strongly_negative
@@ -16,8 +16,8 @@ end_polarity 必须翻转或递进（不能持平）· LLM 默认 neutral→neut
   · VALUE_NO_TURN — 有三字段但 start == end → 该 scene 无翻转
   · TURN_FIDELITY_LOW — turn_fidelity_rate = 翻转 scene 数 / 填充 scene 数 < 0.7
 
-【二阶验证 defer】
-  真 av_judge 读草稿 verify start→end 翻转是否真兑现（占位 _placeholder=true）。
+【边界】只校验 storyboard 声明字段，不读草稿验证 start→end 翻转是否真兑现
+  （无二阶草稿验证 · 输出 _second_order_av_placeholder=true 如实标注）。
 
 【北极星】②④⑤ advisory shadow · 绝不 hard_gate
 """

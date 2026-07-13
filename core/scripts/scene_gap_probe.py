@@ -6,15 +6,15 @@
 expectation 与 actual_outcome 之间的 GAP 上 · 无 GAP = 流水账。LLM 默认平铺直叙 ·
 GAP 全空。
 
-【做法 · 占位 · av_judge defer】
+【做法 · 确定性 storyboard 字段校验】
   · 输入：cluster brief.json 的 scene_storyboard
   · 校验：每个 scene 是否有 (expectation, actual_outcome, gap_type) 三字段
   · 五种 gap_type：reversal / escalation / revelation / deflection / ironic / no_gap
   · 全 no_gap 或全空 → SCENE_GAP_ABSENT advisory
   · 单 gap_type 占比 > 70% → SCENE_GAP_MONOTONE advisory（建议多样）
 
-【二阶验证 defer】
-  真 av_judge 读草稿 verify 每 scene 草稿是否真兑现 declared_gap_type · 占位放 _placeholder=true。
+【边界】只校验 storyboard 声明字段，不读草稿验证 declared_gap_type 是否真兑现
+  （无二阶草稿验证 · 输出 _second_order_av_placeholder=true 如实标注）。
 
 【北极星】②④⑤ advisory shadow · 绝不 hard_gate
   SCENE_GAP_ABSENT / SCENE_GAP_MONOTONE 永不进 audit_hub.HARD_GATE_CODES。

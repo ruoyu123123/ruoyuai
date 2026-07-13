@@ -190,8 +190,6 @@ def test_gate_off_all_axes_placeholder_byte_identical(monkeypatch):
     """零回归证明：无真后端（默认环境）→ 8 轴全部 placeholder，且分数与 _deterministic_seed
     直接计算值逐字节一致（sha256 占位公式未受本次改动影响）。"""
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    for k in [k for k in os.environ if k.startswith("GEN_EMBED__")]:
-        monkeypatch.delenv(k, raising=False)
 
     out = mod.compute_embedding_axes(_AUTHOR, _REPLICA)
     for ax in mod.EMBED_AXES:

@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""gen_chapter_titles.py 专属回归测试（2026-06-17 · 零依赖 · 绝不真打 API）。
+"""gen_chapter_titles.py 专属回归测试（零依赖 · 绝不出网）。
 
-被测脚本 core/scripts/gen_chapter_titles.py 是 LLM-tagged：gen_one_title() 内
-`from openai import OpenAI` + client.chat.completions.create() 调真 gen-model。
+被测脚本 core/scripts/gen_chapter_titles.py 是章标题三段式的两个确定性端：
+  --emit-brief（splitter WAL → novel-titler 任务合同）
+  --apply（fake agent 产物 titles.json → 确定性验收/章头重写/blueprint 回填/receipt）
+中段的标题创作由 novel-titler agent（Claude 亲笔）完成，不在本测试范围
+（北极星⑤：只测确定性验收层，不断言创作质量）。
 
-测试策略（北极星⑤：只测确定性周边逻辑，不断言 LLM 生成质量）：
+测试策略：
 - 纯 helper：parse_chapters / parse_high_list / strip_existing_title / classify_tier /
-  read_chapter / read_changes / _load_title_style —— 直接真调真断言。
-- gen_one_title 的 LLM 调用点：把 fake `openai` 模块塞进 sys.modules（脚本是函数内
-  import openai，所以替换 sys.modules['openai'] 即生效），喂确定性 fake 响应 →
-  测**响应解析 / 反元话语剥离 / 14 字截断 / fallback 链 / 异常兜底**这些确定性逻辑。
-- 🔴 网络兜底：fake openai 的 client 永不出网（fake completions 返回内存对象）；
-  并且 _NetGuard fake 把 base_url/api_key 仅存内存不发请求。漏 mock 时 fake
-  loader 的 api_key 是占位串、base_url 是 example.invalid，真 OpenAI 也连不通——
-  但为防真 import openai 走真出网，所有用例都先 setattr sys.modules['openai']=fake。
+  read_chapter / read_changes / _load_title_style / _is_clean_title /
+  _clean_fallback_title / _title_conflict —— 直接真调真断言。
+- emit-brief：构造最小项目（splitter WAL + 章正文 + 进度.json blueprint + 历史章）→
+  断言 brief 契约字段（章集合/档位/hint/正文路径/历史标题全集/fallback_title）。
+- apply：手写 fake titles.json（模拟 novel-titler 产物）→ 断言验收接受/拒绝、
+  「第NNN章 标题」头重写、blueprint 回填、pending 退回轮回、receipt、幂等重跑。
+- 回归锁：模块源码零 LLM 调用（openai / GenModelLoader 不得复活）。
 
-零依赖约定：只用标准库 · test_* 无参 · 断言失败 raise AssertionError ·
-手动 monkeypatch（save→setattr→finally 还原）。
+零依赖约定：只用标准库 · test_* 无参 · 断言失败 raise AssertionError。
 """
 import json
 import sys
 import tempfile
-import types
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -31,132 +31,88 @@ import gen_chapter_titles as mod  # noqa: E402
 
 
 # ============================================================================
-# fake openai 注入层（替换 sys.modules['openai']）
+# 项目脚手架（splitter WAL + 章正文 + 进度.json + 可选历史章）
 # ============================================================================
-class _FakeMessage:
-    def __init__(self, content):
-        self.content = content
-
-
-class _FakeChoice:
-    def __init__(self, content):
-        self.message = _FakeMessage(content)
-
-
-class _FakeResp:
-    def __init__(self, content):
-        self.choices = [_FakeChoice(content)]
-
-
-class _FakeCompletions:
-    def __init__(self, client):
-        self._client = client
-
-    def create(self, **kwargs):
-        # 记录最后一次调用参数供断言（prompt 组装 / max_tokens / extra_body）
-        self._client.last_create_kwargs = kwargs
-        return _FakeResp(self._client.scripted_content)
-
-
-class _FakeChat:
-    def __init__(self, client):
-        self.completions = _FakeCompletions(client)
-
-
-class _FakeOpenAI:
-    """fake OpenAI client：永不出网，返回预编好的 scripted_content。"""
-    # 类级脚本：fake openai 模块用单例 holder 传 content，避免改 gen_one_title 签名
-    _next_content = "断牙"
-    _raise = None
-
-    def __init__(self, api_key=None, base_url=None, **kw):
-        self.api_key = api_key
-        self.base_url = base_url
-        self.scripted_content = _FakeOpenAI._next_content
-        self.last_create_kwargs = None
-        self.chat = _FakeChat(self)
-        if _FakeOpenAI._raise is not None:
-            # 让 create 抛错以测异常兜底
-            exc = _FakeOpenAI._raise
-
-            def _boom(**kwargs):
-                raise exc
-            self.chat.completions.create = _boom
-
-
-def _make_fake_openai_module():
-    m = types.ModuleType("openai")
-    m.OpenAI = _FakeOpenAI
-    return m
-
-
-class _patch_openai:
-    """上下文管理器：把 fake openai 塞进 sys.modules + 设脚本响应/异常，退出还原。"""
-    def __init__(self, content="断牙", raise_exc=None):
-        self.content = content
-        self.raise_exc = raise_exc
-        self._saved_mod = None
-        self._saved_has = False
-
-    def __enter__(self):
-        self._saved_has = "openai" in sys.modules
-        self._saved_mod = sys.modules.get("openai")
-        _FakeOpenAI._next_content = self.content
-        _FakeOpenAI._raise = self.raise_exc
-        sys.modules["openai"] = _make_fake_openai_module()
-        return self
-
-    def __exit__(self, *a):
-        _FakeOpenAI._next_content = "断牙"
-        _FakeOpenAI._raise = None
-        if self._saved_has:
-            sys.modules["openai"] = self._saved_mod
-        else:
-            sys.modules.pop("openai", None)
-        return False
-
-
-# ============================================================================
-# fake loader（避免读真 .env / 构造真 OpenAI）
-# ============================================================================
-class _FakeProfile:
-    def __init__(self):
-        self.name = "fake"
-        self.model = "fake-model"
-        self.base_url = "https://example.invalid/v1"  # 出网即失败的占位
-        self.api_key = "sk-fake-placeholder"
-        self.temperature = 0.8
-        self.max_tokens = None
-        self.protocol = "openai"
-        self.thinking_level = None
-        self.reasoning_effort = None
-
-
-class _FakeLoader:
-    def __init__(self, profile=None):
-        self._p = profile or _FakeProfile()
-
-    def get_active_profile(self):
-        return self._p
-
-
 def _tmp():
     return Path(tempfile.mkdtemp())
 
 
+def _write_json(p: Path, obj):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_chapter(project: Path, ch: int, body: str = None, titled: str = None):
+    d = project / "章节" / f"第{ch:03d}章"
+    d.mkdir(parents=True, exist_ok=True)
+    text = body if body is not None else f"ch{ch} 的正文。\n他把杯子摔在地上。"
+    if titled:
+        text = f"第{ch:03d}章 {titled}\n\n{text}"
+    (d / f"第{ch:03d}章.txt").write_text(text, encoding="utf-8")
+
+
+def _mk_project(chapter_range=(1, 3), pending_tail=False, history=None,
+                hints=None) -> Path:
+    """最小可 emit-brief 项目。history={章号: 标题} 落成带头的历史章。"""
+    proj = _tmp()
+    key = "001"
+    chs = list(range(chapter_range[0], chapter_range[1] + 1)) if chapter_range else []
+    for ch in chs:
+        _write_chapter(proj, ch)
+    for ch, title in (history or {}).items():
+        _write_chapter(proj, ch, titled=title)
+    wal = {
+        "schema_version": "1.0",
+        "cluster_id": "cluster_001",
+        "chapter_range": list(chapter_range) if chapter_range else [],
+        "pending_tail": {"exists": bool(pending_tail), "cjk": 0, "path": None},
+    }
+    _write_json(proj / "_数据库" / ".wal" / f"splitter_cluster_{key}_decisions.json", wal)
+    storyboard = [{"ch": ch, "title": (hints or {}).get(ch, "")} for ch in chs]
+    _write_json(proj / "_数据库" / "进度.json",
+                {"cluster_blueprint": {"cluster_001": {"scene_storyboard": storyboard}}})
+    return proj
+
+
+def _brief_path(proj: Path) -> Path:
+    return proj / "_数据库" / ".wal" / "cluster_001_title_brief.json"
+
+
+def _titles_path(proj: Path) -> Path:
+    return proj / "_数据库" / ".wal" / "cluster_001_titles.json"
+
+
+def _receipt_path(proj: Path) -> Path:
+    return proj / "_数据库" / ".wal" / "cluster_001_title_apply_receipt.json"
+
+
+def _read_json(p: Path):
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def _fake_titles(proj: Path, titles: dict, **overrides):
+    """模拟 novel-titler agent 产物落盘（OUTPUT schema 见 novel-titler.md）。"""
+    payload = {
+        "schema_version": "novel-titler.v1",
+        "cluster_id": "cluster_001",
+        "titles": {str(k): v for k, v in titles.items()},
+        "agent": "novel-titler",
+        "plan_id": "plan-test-001",
+        "step": 6,
+    }
+    payload.update(overrides)
+    _write_json(_titles_path(proj), payload)
+
+
 # ============================================================================
-# 1. 纯 helper：parse_chapters
+# 1. 纯 helper：parse_chapters / parse_high_list
 # ============================================================================
 def test_parse_chapters_range_and_list():
     assert mod.parse_chapters("1-4") == [1, 2, 3, 4]
     assert mod.parse_chapters("5,6,7") == [5, 6, 7]
-    # 混合：range + 单值 + 空白容忍
     assert mod.parse_chapters("1-3, 10 , 12") == [1, 2, 3, 10, 12]
 
 
-# ============================================================================
-# 2. 纯 helper：parse_high_list
-# ============================================================================
 def test_parse_high_list_empty_and_set():
     assert mod.parse_high_list("") == set()
     assert mod.parse_high_list(None) == set()
@@ -165,37 +121,30 @@ def test_parse_high_list_empty_and_set():
 
 
 # ============================================================================
-# 3. 纯 helper：classify_tier（high_set > tail > normal 优先级）
+# 2. 纯 helper：classify_tier（high_set > tail > normal 优先级）
 # ============================================================================
 def test_classify_tier_priority():
-    # high_set 命中 → high（即便 cluster_position=tail）
     ch_in_high = mod.classify_tier(
         11, {"ecas_metadata": {"cluster_position": "tail"}}, {11})
     assert ch_in_high == "high"
-    # tail 且不在 high_set → mid
     tail = mod.classify_tier(3, {"ecas_metadata": {"cluster_position": "tail"}}, set())
     assert tail == "mid"
-    # 其余 → normal
     assert mod.classify_tier(2, {}, set()) == "normal"
     assert mod.classify_tier(2, {"ecas_metadata": {"cluster_position": "body"}}, set()) == "normal"
 
 
 # ============================================================================
-# 4. 纯 helper：strip_existing_title（剥旧标题 / 无标题原样返回）
+# 3. 纯 helper：strip_existing_title / read_chapter / read_changes
 # ============================================================================
 def test_strip_existing_title():
     with_title = "第003章 断牙\n\n正文第一段。\n再来一段。"
     stripped = mod.strip_existing_title(with_title)
     assert stripped.startswith("正文第一段")
     assert "第003章" not in stripped
-    # 无标题正文：原样返回
     plain = "他把杯子摔在地上。\n碎了。"
     assert mod.strip_existing_title(plain) == plain
 
 
-# ============================================================================
-# 5. 纯 helper：read_chapter / read_changes（文件存在与缺失）
-# ============================================================================
 def test_read_chapter_and_changes():
     proj = _tmp()
     chdir = proj / "章节" / "第005章"
@@ -208,13 +157,11 @@ def test_read_chapter_and_changes():
     p, body = mod.read_chapter(proj, 5)
     assert body == "正文内容"
     assert p.name == "第005章.txt"
-    # 缺失章 → 空串
     _, missing = mod.read_chapter(proj, 99)
     assert missing == ""
 
     changes = mod.read_changes(proj, 5)
     assert changes["ecas_metadata"]["cluster_position"] == "tail"
-    # 缺失 changes → 空 dict
     assert mod.read_changes(proj, 99) == {}
 
 
@@ -223,26 +170,22 @@ def test_read_changes_corrupt_json_returns_empty():
     chdir = proj / "章节" / "第006章"
     chdir.mkdir(parents=True)
     (chdir / "第006章_changes.json").write_text("{ 这不是合法 json", encoding="utf-8")
-    # 损坏 json 不抛错，返回 {}
     assert mod.read_changes(proj, 6) == {}
 
 
 # ============================================================================
-# 6. 纯 helper：_load_title_style（无风格档 / 有 work 但无 title_style）
+# 4. 纯 helper：_load_title_style
 # ============================================================================
 def test_load_title_style_no_style_file():
     proj = _tmp()
     (proj / "_数据库").mkdir(parents=True)
-    # 无 作者风格.json → None
     assert mod._load_title_style(proj) is None
-    # 有 作者风格.json 但无 work 字段 → None
     (proj / "_数据库" / "作者风格.json").write_text(
         json.dumps({"meta": {}}, ensure_ascii=False), encoding="utf-8")
     assert mod._load_title_style(proj) is None
 
 
 def test_load_title_style_resolves_from_workspace():
-    # 构造 project/workspace/styles/<work>/title_style.json
     proj = _tmp()
     (proj / "_数据库").mkdir(parents=True)
     (proj / "_数据库" / "作者风格.json").write_text(
@@ -258,173 +201,310 @@ def test_load_title_style_resolves_from_workspace():
 
 
 # ============================================================================
-# 7. gen_one_title：正常路径（fake LLM 返回干净标题）
-# ============================================================================
-def test_gen_one_title_clean_response():
-    with _patch_openai(content="断牙"):
-        title = mod.gen_one_title(
-            _FakeLoader(), 3, "正文内容", "提示", "normal", [])
-    assert title == "断牙"
-
-
-# ============================================================================
-# 8. gen_one_title：反元话语剥离（reasoning model 输出思考链 → 取末尾真标题）
-# ============================================================================
-def test_gen_one_title_strips_meta_chatter():
-    # 模型先吐思考链，最后一行才是真标题 → 解析逻辑应取「断牙」
-    noisy = "好的，我来生成一个标题。\n首先分析正文。\n断牙"
-    with _patch_openai(content=noisy):
-        title = mod.gen_one_title(
-            _FakeLoader(), 3, "正文", "提示", "normal", [])
-    assert title == "断牙", f"应剥离元话语取真标题，得到 {title!r}"
-
-
-# ============================================================================
-# 9. gen_one_title：剥「第N章」前缀 + 引号 + 14 字截断
-# ============================================================================
-def test_gen_one_title_strips_prefix_quotes_and_truncates():
-    # 带「第3章」前缀 + 引号包裹 → 应剥成纯标题
-    with _patch_openai(content="「断牙」"):
-        t1 = mod.gen_one_title(_FakeLoader(), 3, "正文", "h", "normal", [])
-    assert t1 == "断牙", f"引号应剥除，得 {t1!r}"
-
-    # 超 14 字 → 截断到 14
-    longtitle = "一二三四五六七八九十甲乙丙丁戊己庚"  # 17 字
-    with _patch_openai(content=longtitle):
-        t2 = mod.gen_one_title(_FakeLoader(), 3, "正文", "h", "high", [])
-    assert len(t2) <= 14, f"应截断到 14 字，得 {len(t2)} 字: {t2!r}"
-
-
-# ============================================================================
-# 10. gen_one_title：全元话语 → 回退 hint；异常 → 回退 hint
-# ============================================================================
-def test_gen_one_title_fallback_to_hint_on_all_meta():
-    # 内容全是元话语关键词且无清洁候选 → 终极后处理回退 hint
-    with _patch_openai(content="我们生成需要让我好的"):
-        title = mod.gen_one_title(
-            _FakeLoader(), 7, "正文", "命运母题", "normal", [])
-    assert title == "命运母题", f"全元话语应回退 hint，得 {title!r}"
-
-
-def test_gen_one_title_fallback_on_exception():
-    # create 抛错 → except 分支返回干净 hint（hint 本身是干净标题时）
-    with _patch_openai(content="无关", raise_exc=RuntimeError("API 520 限速")):
-        title = mod.gen_one_title(
-            _FakeLoader(), 9, "正文", "孤峰", "normal", [])
-    assert title == "孤峰", f"异常应回退干净 hint，得 {title!r}"
-    # hint 也为空 → 回退 第N章
-    with _patch_openai(content="无关", raise_exc=RuntimeError("boom")):
-        title2 = mod.gen_one_title(
-            _FakeLoader(), 12, "正文", "", "normal", [])
-    assert title2 == "第12章", f"无 hint 异常应回退 第N章，得 {title2!r}"
-
-
-# ============================================================================
-# 13. 🔴 G3 e2e fix #3：storyboard 指令文本 hint 绝不能当标题
+# 5. 纯 helper：_is_clean_title / _clean_fallback_title / _title_conflict
 # ============================================================================
 def test_is_clean_title_rejects_directive_and_accepts_clean():
-    # 干净标题：短 / 无标点 / 无占位词 → True
     assert mod._is_clean_title("孤峰")
     assert mod._is_clean_title("命运母题")
     assert mod._is_clean_title("「断牙」")  # 包裹符剥后干净
-    # storyboard 指令文本（含句号 + 「主角」占位）→ False
     dirty = "倒叙强冲突开场。铁十字街一间逼仄昏暗的出租屋里，主角顶着占卜"
     assert not mod._is_clean_title(dirty), "含句号+主角占位的 storyboard 指令不该判干净"
-    # 含「主角」占位词 → False
     assert not mod._is_clean_title("主角登场")
-    # 含分句标点 → False
     assert not mod._is_clean_title("他来了，她走了")
-    # 超 14 字 → False
     assert not mod._is_clean_title("一二三四五六七八九十甲乙丙丁戊")
-    # 空 → False
     assert not mod._is_clean_title("")
 
 
 def test_clean_fallback_title_rejects_storyboard_hint():
-    # storyboard 指令 hint → 不原样返回，退「第N章」
     dirty = "倒叙强冲突开场。铁十字街一间逼仄昏暗的出租屋里，主角顶着占卜"
     assert mod._clean_fallback_title(1, dirty) == "第1章"
-    # 干净 hint → 原样（剥包裹符）返回
     assert mod._clean_fallback_title(3, "孤峰") == "孤峰"
     assert mod._clean_fallback_title(3, "「断牙」") == "断牙"
-    # 空 hint → 第N章
     assert mod._clean_fallback_title(7, "") == "第7章"
 
 
-def test_gen_one_title_exception_does_not_emit_storyboard_directive():
-    """🔴 真 API 间歇 500/EMPTY_RESPONSE（异常）+ hint 是 storyboard 指令文本时，
-    fallback 绝不把指令原文当标题（G3 e2e 实测翻车场景）。"""
-    dirty_hint = "倒叙强冲突开场。铁十字街一间逼仄昏暗的出租屋里，主角顶着占卜"
-    with _patch_openai(content="无关", raise_exc=RuntimeError("500 EMPTY_RESPONSE")):
-        title = mod.gen_one_title(
-            _FakeLoader(), 1, "正文内容", dirty_hint, "normal", [])
-    assert title == "第1章", f"脏 storyboard hint 不该当标题，应退第N章，得 {title!r}"
-    assert "倒叙" not in title and "主角" not in title and "。" not in title
-
-
-def test_gen_one_title_all_meta_with_dirty_hint_falls_back_clean():
-    """全元话语响应 + 脏 hint → 终极后处理也走干净 fallback（不吐 storyboard 指令）。"""
-    dirty_hint = "回溯场景。主角走进房间，反派现身"
-    with _patch_openai(content="我们生成需要让我好的"):
-        title = mod.gen_one_title(
-            _FakeLoader(), 5, "正文", dirty_hint, "normal", [])
-    assert title == "第5章", f"全元话语+脏 hint 应退第N章，得 {title!r}"
+def test_title_conflict_exact_and_containment():
+    # 精确相等
+    assert mod._title_conflict("断牙", ["断牙", "孤峰"]) == "断牙"
+    # 母题包含（「葬」用过就不许「葬礼」·双向）
+    assert mod._title_conflict("葬礼", ["葬"]) == "葬"
+    assert mod._title_conflict("葬", ["葬礼"]) == "葬礼"
+    # 无冲突
+    assert mod._title_conflict("夜雾", ["断牙", "孤峰"]) is None
+    # 「第7章」不是「第17章」的连续子串 → 不冲突
+    assert mod._title_conflict("第17章", ["第7章"]) is None
 
 
 # ============================================================================
-# 11. gen_one_title：prompt 组装 + max_tokens 透传（确定性周边）
+# 6. --emit-brief：契约产出
 # ============================================================================
-def test_gen_one_title_prompt_assembly_and_params():
-    holder = {}
+def test_emit_brief_produces_contract():
+    proj = _mk_project(chapter_range=(1, 3), hints={1: "孤峰", 2: "倒叙强冲突开场。主角登场"})
+    rc = mod.emit_brief(proj, "cluster_001")
+    assert rc == 0, f"emit_brief 应成功，rc={rc}"
+    brief = _read_json(_brief_path(proj))
+    assert brief["schema_version"] == "title_brief.v1"
+    assert brief["cluster_id"] == "cluster_001"
+    assert brief["agent"] == "novel-titler"
+    assert brief["no_op"] is False
+    assert brief["accepted"] == {}
+    assert brief["output_path"].endswith("cluster_001_titles.json")
+    chs = brief["chapters"]
+    assert [e["ch"] for e in chs] == [1, 2, 3]
+    # 每章条目契约：档位/hint/正文路径/fallback_title
+    e1 = chs[0]
+    assert e1["tier"] == "normal"
+    assert e1["hint"] == "孤峰"
+    assert e1["body_path"] == "章节/第001章/第001章.txt"
+    assert e1["fallback_title"] == "孤峰"  # 干净 hint 直接当兜底候选
+    # 脏 hint 的兜底候选退「第N章」
+    assert chs[1]["fallback_title"] == "第2章"
+    # cluster 标识归一：裸数字 / 无零填充也接受
+    rc2 = mod.emit_brief(proj, "1")
+    assert rc2 == 0
 
-    # 用一个会记录 kwargs 的 fake：通过 _patch_openai 的 create 已经记录在 client，
-    # 但 client 实例在函数内创建无法直接取。改为校验副作用：history/正文进了 user prompt。
-    # 这里通过让 fake 返回「正文里出现的片段」间接验证 body 被传入不可行，
-    # 故直接验证 history 去重提示生效——传 20+ 历史时不报错且能产出标题。
-    history = [f"标题{i}" for i in range(25)]
-    with _patch_openai(content="新标题"):
-        title = mod.gen_one_title(
-            _FakeLoader(), 5, "一段正文。", "提示", "mid", history)
-    assert title == "新标题"
-    holder["ok"] = True
-    assert holder["ok"]
+
+def test_emit_brief_tier_rules():
+    # 无 pending_tail：WAL 末章 = cluster 收尾章 → mid
+    proj = _mk_project(chapter_range=(1, 3))
+    assert mod.emit_brief(proj, "001", high_chapters="2") == 0
+    tiers = {e["ch"]: e["tier"] for e in _read_json(_brief_path(proj))["chapters"]}
+    assert tiers == {1: "normal", 2: "high", 3: "mid"}, tiers
+    # 有 pending_tail：实切末章不是收尾 → 不升 mid
+    proj2 = _mk_project(chapter_range=(1, 3), pending_tail=True)
+    assert mod.emit_brief(proj2, "001") == 0
+    tiers2 = {e["ch"]: e["tier"] for e in _read_json(_brief_path(proj2))["chapters"]}
+    assert tiers2 == {1: "normal", 2: "normal", 3: "normal"}, tiers2
+    # high 显式指定优先于末章 mid
+    proj3 = _mk_project(chapter_range=(1, 3))
+    assert mod.emit_brief(proj3, "001", high_chapters="3") == 0
+    tiers3 = {e["ch"]: e["tier"] for e in _read_json(_brief_path(proj3))["chapters"]}
+    assert tiers3[3] == "high"
+
+
+def test_emit_brief_history_collection_excludes_own_cluster():
+    # 历史章 ch90「断牙」进 history；本 cluster ch1 已带头「旧名」被排除（重命名不卡自己）
+    proj = _mk_project(chapter_range=(1, 3), history={90: "断牙"})
+    _write_chapter(proj, 1, titled="旧名")
+    assert mod.emit_brief(proj, "001") == 0
+    brief = _read_json(_brief_path(proj))
+    assert brief["history_titles"] == ["断牙"], brief["history_titles"]
+
+
+def test_emit_brief_zero_chapters_noop():
+    # splitter 整稿退 pending_tail（chapter_range=[]）→ no-op brief · exit 0
+    proj = _mk_project(chapter_range=None, pending_tail=True)
+    rc = mod.emit_brief(proj, "001")
+    assert rc == 0
+    brief = _read_json(_brief_path(proj))
+    assert brief["no_op"] is True
+    assert brief["chapters"] == []
+
+
+def test_emit_brief_missing_wal_fatal():
+    proj = _tmp()
+    assert mod.emit_brief(proj, "001") == 3
+
+
+def test_emit_brief_missing_body_fatal():
+    proj = _mk_project(chapter_range=(1, 3))
+    (proj / "章节" / "第002章" / "第002章.txt").unlink()
+    assert mod.emit_brief(proj, "001") == 3
+
+
+def test_emit_brief_invalid_cluster_fatal():
+    proj = _mk_project()
+    assert mod.emit_brief(proj, "not-a-cluster") == 3
 
 
 # ============================================================================
-# 12. 🔴 网络兜底自检：真 openai 未被 patch 时 gen_one_title 不应静默成功
-#     （证明所有上面用例确实走 fake，没有漏网真出网）
+# 7. --apply：验收接受路径（fake agent 产物 → 章头重写 + 回填 + receipt）
 # ============================================================================
-def test_network_guard_real_openai_path_blocked():
-    """网络兜底自检：注入一个「OpenAI 客户端一旦构造即 raise」的 openai 替身。
+def test_apply_accepts_clean_titles_end_to_end():
+    proj = _mk_project(chapter_range=(1, 3), hints={1: "旧提示"})
+    assert mod.emit_brief(proj, "001", high_chapters="2") == 0
+    _fake_titles(proj, {1: "断牙", 2: "徇射穿了第二个太阳", 3: "凿齿夜袭"})
+    rc = mod.apply_titles(proj, "001")
+    assert rc == 0, f"全干净标题应验收通过，rc={rc}"
+    # 章头重写
+    body1 = (proj / "章节" / "第001章" / "第001章.txt").read_text(encoding="utf-8")
+    assert body1.startswith("第001章 断牙\n\n"), body1[:30]
+    # blueprint 回填（title 更新 + _old_title 保留）
+    bp = _read_json(proj / "_数据库" / "进度.json")["cluster_blueprint"]
+    scenes = {p["ch"]: p for p in bp["cluster_001"]["scene_storyboard"]}
+    assert scenes[1]["title"] == "断牙"
+    assert scenes[1]["_old_title"] == "旧提示"
+    # receipt
+    receipt = _read_json(_receipt_path(proj))
+    assert receipt["schema_version"] == "gen_chapter_titles.receipt.v1"
+    assert receipt["agent"] == "novel-titler"
+    assert receipt["completed"] is True
+    assert receipt["no_op"] is False
+    assert receipt["titles"] == {"1": "断牙", "2": "徇射穿了第二个太阳", "3": "凿齿夜袭"}
+    assert receipt["tier_counts"] == {"normal": 1, "mid": 1, "high": 1}
+    assert receipt["plan_id"] == "plan-test-001"
+    # brief 终态：pending 清空 + accepted 齐全
+    brief = _read_json(_brief_path(proj))
+    assert brief["chapters"] == []
+    assert set(brief["accepted"]) == {"1", "2", "3"}
 
-    🔴 重要发现：gen_one_title 里 `client = OpenAI(...)`（脚本第 197 行）在 try 块
-    **之外**——try 只从第 199 行 client.chat.completions.create 起。所以客户端构造
-    阶段的出网失败会**直接向上抛**（不被 except 兜成 hint）。这正是网络守卫想要的：
-    任何真出网点被触发 → 测试**立刻炸响**（AssertionError），绝不静默花用户的钱。
 
-    本用例断言：守卫确实被触发并把 AssertionError 抛出来（而非被吞）。"""
-    saved_has = "openai" in sys.modules
-    saved = sys.modules.get("openai")
+def test_apply_strips_wrappers_before_write():
+    # agent 给标题带引号包裹 → 剥后落盘
+    proj = _mk_project(chapter_range=(1, 1), pending_tail=True)
+    assert mod.emit_brief(proj, "001") == 0
+    _fake_titles(proj, {1: "「断牙」"})
+    assert mod.apply_titles(proj, "001") == 0
+    body = (proj / "章节" / "第001章" / "第001章.txt").read_text(encoding="utf-8")
+    assert body.startswith("第001章 断牙\n\n")
 
-    guard_mod = types.ModuleType("openai")
 
-    class _BlockedOpenAI:
-        def __init__(self, *a, **k):
-            raise AssertionError("REAL_LLM_CALL_BLOCKED: 真 OpenAI 客户端被构造")
+def test_apply_missing_titles_json_pending():
+    proj = _mk_project(chapter_range=(1, 3))
+    assert mod.emit_brief(proj, "001") == 0
+    rc = mod.apply_titles(proj, "001")
+    assert rc == 2, f"缺 titles.json 应 exit 2=pending_titles，rc={rc}"
+    assert not _receipt_path(proj).exists()
 
-    guard_mod.OpenAI = _BlockedOpenAI
-    sys.modules["openai"] = guard_mod
-    fired = False
-    try:
-        mod.gen_one_title(_FakeLoader(), 1, "正文", "兜底标题", "normal", [])
-    except AssertionError as e:
-        if "REAL_LLM_CALL_BLOCKED" in str(e):
-            fired = True
-        else:
-            raise
-    finally:
-        if saved_has:
-            sys.modules["openai"] = saved
-        else:
-            sys.modules.pop("openai", None)
-    assert fired, "真出网守卫未被触发——说明真 OpenAI 客户端可能被静默构造（危险）"
+
+# ============================================================================
+# 8. --apply：验收拒绝路径（退回 pending 轮回）
+# ============================================================================
+def test_apply_rejects_history_duplicate_and_keeps_clean_ones():
+    proj = _mk_project(chapter_range=(1, 3), history={90: "断牙"})
+    assert mod.emit_brief(proj, "001") == 0
+    _fake_titles(proj, {1: "断牙", 2: "孤峰", 3: "凿齿夜袭"})
+    rc = mod.apply_titles(proj, "001")
+    assert rc == 2, "与历史重复的章应退回 pending"
+    # ch1 未写头（拒绝），ch2/ch3 已写头（增量落地）
+    body1 = (proj / "章节" / "第001章" / "第001章.txt").read_text(encoding="utf-8")
+    assert not body1.startswith("第001章"), "被拒章不得写头"
+    body2 = (proj / "章节" / "第002章" / "第002章.txt").read_text(encoding="utf-8")
+    assert body2.startswith("第002章 孤峰\n\n")
+    # brief：ch1 留 pending 带 rejected 原因；accepted 收 ch2/ch3
+    brief = _read_json(_brief_path(proj))
+    assert [e["ch"] for e in brief["chapters"]] == [1]
+    rej = brief["chapters"][0]["rejected"]
+    assert rej["last_title"] == "断牙"
+    assert "断牙" in rej["reason"]
+    assert set(brief["accepted"]) == {"2", "3"}
+    assert not _receipt_path(proj).exists(), "有退回章时不得写完成 receipt"
+
+
+def test_apply_rejects_dirty_and_overlong_titles():
+    proj = _mk_project(chapter_range=(1, 3))
+    assert mod.emit_brief(proj, "001") == 0
+    _fake_titles(proj, {
+        1: "倒叙强冲突开场。主角顶着占卜",   # storyboard 指令文本（标点+占位词）
+        2: "一二三四五六七八九十甲乙丙丁戊己庚",  # 17 字超长
+        3: "凿齿夜袭",
+    })
+    rc = mod.apply_titles(proj, "001")
+    assert rc == 2
+    brief = _read_json(_brief_path(proj))
+    rejected = {e["ch"]: e["rejected"]["reason"] for e in brief["chapters"]}
+    assert set(rejected) == {1, 2}
+    assert "标点" in rejected[1] or "指令" in rejected[1]
+    assert "超长" in rejected[2]
+    assert set(brief["accepted"]) == {"3"}
+
+
+def test_apply_rejects_batch_internal_duplicate():
+    # 本批内互查：ch1/ch2 同名 → 章号小者先到先得，后者退回
+    proj = _mk_project(chapter_range=(1, 2), pending_tail=True)
+    assert mod.emit_brief(proj, "001") == 0
+    _fake_titles(proj, {1: "断牙", 2: "断牙"})
+    rc = mod.apply_titles(proj, "001")
+    assert rc == 2
+    brief = _read_json(_brief_path(proj))
+    assert set(brief["accepted"]) == {"1"}
+    assert [e["ch"] for e in brief["chapters"]] == [2]
+
+
+def test_apply_schema_and_key_mismatch_pending_without_side_effects():
+    proj = _mk_project(chapter_range=(1, 3))
+    assert mod.emit_brief(proj, "001") == 0
+    # 键集合缺 ch3 → 契约不符 → exit 2 且零副作用（schema 挡在验收前）
+    _fake_titles(proj, {1: "断牙", 2: "孤峰"})
+    assert mod.apply_titles(proj, "001") == 2
+    body1 = (proj / "章节" / "第001章" / "第001章.txt").read_text(encoding="utf-8")
+    assert not body1.startswith("第001章"), "契约不符时不得写任何章头"
+    # schema_version 错 → exit 2
+    _fake_titles(proj, {1: "断牙", 2: "孤峰", 3: "凿齿夜袭"},
+                 schema_version="wrong.v0")
+    assert mod.apply_titles(proj, "001") == 2
+    # cluster_id 错 → exit 2
+    _fake_titles(proj, {1: "断牙", 2: "孤峰", 3: "凿齿夜袭"},
+                 cluster_id="cluster_999")
+    assert mod.apply_titles(proj, "001") == 2
+    # agent 错 → exit 2
+    _fake_titles(proj, {1: "断牙", 2: "孤峰", 3: "凿齿夜袭"}, agent="someone-else")
+    assert mod.apply_titles(proj, "001") == 2
+
+
+def test_apply_second_round_completes_after_rename():
+    """pending 轮回闭环：第一轮 ch1 重复被退 → agent 重命名 → 第二轮全过 receipt 落盘。"""
+    proj = _mk_project(chapter_range=(1, 3), history={90: "断牙"})
+    assert mod.emit_brief(proj, "001") == 0
+    _fake_titles(proj, {1: "断牙", 2: "孤峰", 3: "凿齿夜袭"})
+    assert mod.apply_titles(proj, "001") == 2
+    # 第二轮：agent 只对 pending 章（ch1）重产（键集合=当前 brief 待命名集合）
+    _fake_titles(proj, {1: "夜雾"})
+    rc = mod.apply_titles(proj, "001")
+    assert rc == 0, f"重命名后应全过，rc={rc}"
+    receipt = _read_json(_receipt_path(proj))
+    assert receipt["titles"] == {"1": "夜雾", "2": "孤峰", "3": "凿齿夜袭"}
+    body1 = (proj / "章节" / "第001章" / "第001章.txt").read_text(encoding="utf-8")
+    assert body1.startswith("第001章 夜雾\n\n")
+
+
+def test_apply_second_round_rejects_same_title_again():
+    # 重 spawn 后 agent 给了同一个坏标题 → 幂等再拒（不静默放行）
+    proj = _mk_project(chapter_range=(1, 1), history={90: "断牙"}, pending_tail=True)
+    assert mod.emit_brief(proj, "001") == 0
+    _fake_titles(proj, {1: "断牙"})
+    assert mod.apply_titles(proj, "001") == 2
+    assert mod.apply_titles(proj, "001") == 2, "同一坏产物重跑必须仍拒"
+
+
+# ============================================================================
+# 9. --apply：no-op 与幂等
+# ============================================================================
+def test_apply_noop_receipt_for_zero_chapters():
+    proj = _mk_project(chapter_range=None, pending_tail=True)
+    assert mod.emit_brief(proj, "001") == 0
+    rc = mod.apply_titles(proj, "001")
+    assert rc == 0
+    receipt = _read_json(_receipt_path(proj))
+    assert receipt["no_op"] is True
+    assert receipt["completed"] is True
+    assert receipt["titles"] == {}
+
+
+def test_apply_idempotent_rerun_after_complete():
+    proj = _mk_project(chapter_range=(1, 2), pending_tail=True)
+    assert mod.emit_brief(proj, "001") == 0
+    _fake_titles(proj, {1: "断牙", 2: "孤峰"})
+    assert mod.apply_titles(proj, "001") == 0
+    _receipt_path(proj).unlink()  # receipt 丢失后重跑应补写
+    rc = mod.apply_titles(proj, "001")
+    assert rc == 0
+    assert _read_json(_receipt_path(proj))["titles"] == {"1": "断牙", "2": "孤峰"}
+    # 章头保持单份（strip_existing_title 幂等）
+    body1 = (proj / "章节" / "第001章" / "第001章.txt").read_text(encoding="utf-8")
+    assert body1.count("第001章") == 1
+
+
+def test_apply_missing_brief_fatal():
+    proj = _tmp()
+    assert mod.apply_titles(proj, "001") == 3
+
+
+# ============================================================================
+# 10. 🔴 回归锁：LLM 生成路径不得复活（标题创作只属 novel-titler agent）
+# ============================================================================
+def test_no_llm_call_path_in_module():
+    src = (_ROOT / "core" / "scripts" / "gen_chapter_titles.py").read_text(encoding="utf-8")
+    for forbidden in ("import openai", "from openai", "GenModelLoader",
+                      "chat.completions", "gen_one_title"):
+        assert forbidden not in src, f"LLM 生成路径复活嫌疑: {forbidden!r}"

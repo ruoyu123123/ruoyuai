@@ -17,10 +17,10 @@
   范式照搬 embedding_store.compute_character_drift（centroid + cosine + 维度混用防护），
   不改 embedding_store 任何一行。
 
-【embedding 后端】默认 hash（embedding_store._detect_backend 默认 hash · opt-in 才 bge/通义 API）。
+【embedding 后端】默认 hash（embedding_store._detect_backend 默认 hash · opt-in 才本地模型链）。
   ⚠️ hash 后端是 md5 ngram 袋，**语义弱**——同义改写/换词会被当成漂移，相似度只反映字面 ngram 重叠。
   本 scanner 在 hash 下是**占位**（结构成立但语义信号弱，prone to 误判）；
-  只有用户 opt-in 真语义后端（.env 配 GEN_EMBED__* API，或 EMBED_BACKEND=local 装 bge）后，
+  只有用户 opt-in 真语义后端（EMBED_BACKEND=mstyle/ruoyu_style/local 等本地链）后，
   相似度才有强语义意义。报告里 backend 字段透出当前后端 + 占位提示，供裁决者判定可信度。
 
 【顾问非法官 · 影子并行】(北极星⑤ + 共同纪律 4)

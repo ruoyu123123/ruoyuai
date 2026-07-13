@@ -38,7 +38,7 @@ env REVISION_HOMOGENIZATION_MODE: off / shadow(默认) / active。
 
 【🔴 2026-07-01 语义路径升级（style_embed AP 0.887·经 embedding_store.compute_embedding 消费）】
   上面三维指纹本就自认「PCA-ECDF SFS 完整版未实装的占位 fallback」（字面统计·非语义）。
-  真 embedding 后端就绪时（EMBED_BACKEND 非空非 hash，或配了 GEN_EMBED__* API），额外算
+  真 embedding 后端就绪时（EMBED_BACKEND 非空非 hash），额外算
   pre_fix/post_fix 的语义/风格 centroid 余弦距离——pre_fix（gen_fixer 修订前的原始产出）
   天然是本 scanner 范围内可得的风格保真参照（呼应既有 pair_fallback「无作者档时两稿互比」
   范式，只是把 3 维字面统计换成真语义向量），post_fix 与其的距离即修订造成的语义/风格漂移。
@@ -79,21 +79,14 @@ MIN_CJK = 500
 DELTA_SFS_FLOOR = 2.0  # advisory 触发阈
 
 
-# ── 🔴 2026-07-01 语义路径（真 embedding 后端才跑·范式抄 topic_drift_scanner）──────────
+# ── 语义路径（真 embedding 后端才跑）──────────
 def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
-
-    原样复制自 topic_drift_scanner.py（本仓既有约定：每个 scanner 自带一份小 helper 副本，
-    不 import 跨 scanner 依赖）。也检查 .env 的 GEN_EMBED__* API 配置
-    （由 embedding_store._load_embed_profile 消费）。
+    """EMBED_BACKEND 非空且非 hash（本地 daemon/ruoyu_style/mstyle/local 链）→ True；
+    未设或 =hash（默认 hash 袋·无真语义）→ False。本仓约定：每个消费风格 embedding
+    的文件自带一份同口径判定，不互相 import。
     """
     eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    return bool(eb) and eb != "hash"
 
 
 # 🔬 待金标准校准：pre_fix→post_fix 语义/风格 centroid 余弦距离 ≥ 此值 → advisory 触发阈

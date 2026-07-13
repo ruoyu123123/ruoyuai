@@ -125,11 +125,11 @@ def test_train_reads_protected_when_compact_exists(tmp_path):
     assert "PROTECTED 段数: 2" in out
 
 
-# ---------- 集成 thin-slice: mock rollout/optimizer 跑1 epoch ----------
+# ---------- 集成 thin-slice: mock rollout/patch 提案 job 跑1 epoch ----------
 
 
 def test_train_thin_slice_one_epoch(tmp_path):
-    """mock rollout/optimizer/patch_applier 跑一轮,验证主循环不崩 + 升级路径。"""
+    """mock rollout/patch 提案 job 跑一轮,验证主循环不崩 + 升级路径。"""
     _mk_minimal_project(tmp_path, n_clusters=10)
     skill = tmp_path / "skill_FINAL.md"
 
@@ -157,12 +157,12 @@ def test_train_thin_slice_one_epoch(tmp_path):
         log.write_text("{}", encoding="utf-8")
         return trajs, log
 
-    # mock optimizer 返回一条 add patch (合法,会被应用)
-    def fake_optimizer(skill_text, trajectories, **kw):
-        return [{"op": "add", "new": "## 新段\n\n内容"}], "fake reply"
+    # mock patch 提案 job 返回一条 add patch (合法,会被应用)
+    def fake_patch_job(**kw):
+        return [{"op": "add", "new": "## 新段\n\n内容"}], tmp_path
 
     with _patch("skill_opt.train.rollout.rollout_batch", fake_rollout), \
-         _patch("skill_opt.train.optimizer.propose_patches", fake_optimizer):
+         _patch("skill_opt.train.optimizer_jobs.require_patch_job", fake_patch_job):
         result = train.train(
             project_root=tmp_path,
             initial_skill_path=skill,
@@ -215,11 +215,11 @@ def test_train_accepts_when_reward_improves(tmp_path):
         log.write_text("{}", encoding="utf-8")
         return trajs, log
 
-    def fake_optimizer(skill_text, trajectories, **kw):
-        return [{"op": "add", "new": "## 新段\n\n内容"}], "fake"
+    def fake_patch_job(**kw):
+        return [{"op": "add", "new": "## 新段\n\n内容"}], tmp_path
 
     with _patch("skill_opt.train.rollout.rollout_batch", fake_rollout), \
-         _patch("skill_opt.train.optimizer.propose_patches", fake_optimizer):
+         _patch("skill_opt.train.optimizer_jobs.require_patch_job", fake_patch_job):
         result = train.train(
             project_root=tmp_path,
             initial_skill_path=skill,

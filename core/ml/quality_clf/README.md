@@ -15,18 +15,16 @@ PY=core/ml/.venv/Scripts/python.exe        # 本项目 venv（后台在装 torch
 # ① 造数据集（纯 stdlib·无需 torch·可立即跑）
 $PY core/ml/quality_clf/data_prep.py                       # 全量(别抽样·实测 ~78:1 不均衡)
 $PY core/ml/quality_clf/data_prep.py --human-cap-per-author 60   # ★训练推荐:均衡到 ~10:1
+# 外部多生成器负样本（如有）经 --ai-extra-dir ingest（文件名约定 <author>__<generator>__NN.txt）
 
-# ②（可选·推荐）多生成器同题材负样本（用带 openai 的系统 Python·py -3）
-py -3 core/ml/quality_clf/gen_negatives.py --max-samples 60 --mode continue
-
-# ③ 训练（★主代理在 GPU 上跑·写脚本时别跑）
+# ② 训练（★主代理在 GPU 上跑·写脚本时别跑）
 $PY core/ml/quality_clf/train.py --base hfl/chinese-macbert-base \
     --out-dir runs/macbert_v1 --use-feats --fp16 --epochs 3
 
-# ④ 评估
+# ③ 评估
 $PY core/ml/quality_clf/eval.py --model-dir runs/macbert_v1 --split test --fp16
 
-# ⑤ 跨作者泛化测试（防作者身份捷径·强烈建议）
+# ④ 跨作者泛化测试（防作者身份捷径·强烈建议）
 $PY core/ml/quality_clf/data_prep.py --split-mode by_author --holdout-authors 惊悚乐园 剑来 --out-dir data_byauthor
 ```
 
@@ -100,7 +98,7 @@ features.py 保留 `dash_per_k` 但不预设方向，交分类器学。
    「gemini/本管线指纹」+「作者身份」，**换 DeepSeek/豆包/Qwen 会崩**。研究建议把这 39 个当**珍贵的
    held-out 对抗硬集/种子**，不是训练分布（用 `data_prep.py --replicas-heldout-test`）。
 3. **极端不均衡（实测 ~78:1）**：人样本 49,754 chunk vs AI 637 chunk。focal+采样器能缓解但治标——
-   训练时建议 `--human-cap-per-author 60`（→ ~10:1）或先用 gen_negatives.py 把负样本补到数千。
+   训练时建议 `--human-cap-per-author 60`（→ ~10:1）或先经 `--ai-extra-dir` 引入外部多生成器负样本补到数千。
 4. **对抗性天然衰减**：本管线的目标就是把 AI prose 写得像人 → 任何检测器都会被自家 humanize 流程逐步绕过
    （MAGA 实测 AUC 掉 ~8%·StoryScope 风格 fine-tune 后检测 97%→3%）。**须定期重训** + 把自家修过的稿当 AI 正例做对抗加固。
 
@@ -109,7 +107,7 @@ features.py 保留 `dash_per_k` 但不预设方向，交分类器学。
 | 级别 | 做法 | 现状 |
 |---|---|---|
 | **P0 立即可跑** | 39 复刻 + 草稿当 **bootstrap/对抗 held-out** 训一个 baseline·跑通全管线 | ✅ 已就绪（data_prep 默认） |
-| **P1 推荐主力** | `gen_negatives.py` 从人样本开头**同题材配对**生成 AI 续写/改写·**多生成器** | ⚠️ 脚本就绪·但 .env 当前多半只有 gemini·要真泛化须加 DeepSeek/Qwen/豆包 profile |
+| **P1 推荐主力** | 外部多生成器同题材负样本经 `data_prep.py --ai-extra-dir` ingest（文件名约定 `<author>__<generator>__NN.txt`·按组 split） | 📋 ingest 机制就绪·负样本需外部生成器产出 |
 | **P2 辅助迁移** | 拉 **C-ReD**(github.com/HeraldofLight/C-ReD·含 Gemini 等现代生成器) 做预训练/校准·HC3-Chinese 挖套话词表 | 📋 未拉（跨域·仅辅助·别当小说域真值） |
 
 ---
@@ -120,7 +118,6 @@ features.py 保留 `dash_per_k` 但不预设方向，交分类器学。
 |---|---|---|
 | `features.py` | 24 维确定性风格特征（stdlib·抗捷径·与 semantic_slop 同源词表） | ✅ 纯 stdlib |
 | `data_prep.py` | 造 human/ai 数据集 + source-level/by-author 切分 + eval 均衡 | ✅ 纯 stdlib·**已实测跑通** |
-| `gen_negatives.py` | （可选）多生成器同题材配对负样本 | ⚠️ 需 openai（系统 py -3） |
 | `train.py` | macbert-base fine-tune + 特征融合 + focal loss + 可选 LoRA/质量回归头 | 🟡 需 torch·**留 GPU 跑** |
 | `eval.py` | held-out 评估（chunk/doc 级·按 kind 拆对抗鲁棒性·混淆矩阵） | 🟡 需 torch |
 | `ai_tone_scanner.py` | 训好后包成 advisory scanner（对齐 audit_hub 契约） | 🟡 需 torch+模型 |

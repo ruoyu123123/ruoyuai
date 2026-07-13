@@ -77,10 +77,10 @@ def parse_skill_sections(skill_text: str) -> list[dict]:
 
 
 def has_real_embedding_backend() -> bool:
+    """EMBED_BACKEND 非空且非 hash（本地 daemon/ruoyu_style/mstyle/local 链）→ True；
+    未设或 =hash（默认 hash 袋·无真语义）→ False。"""
     backend = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if backend and backend != "hash":
-        return True
-    return any(key.startswith("GEN_EMBED__") for key in os.environ)
+    return bool(backend) and backend != "hash"
 
 
 def semantic_attribute_to_skill_section(sections: list, keywords) -> dict | None:

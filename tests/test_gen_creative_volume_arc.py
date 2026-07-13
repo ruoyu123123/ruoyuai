@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""gen_creative volume_arc mode 测试（阶段2 创建书籍·P2 分卷 chunk + WAL 断点续跑）。
+"""gen_creative volume_arc mode 测试（agent 亲笔单元 + 确定性验收合并·scene_jobs 范式）。
 
-fake llm_transport·不调真 API。验：
-- prompt 脚手架无枚举规训（北极星⑤）+ 故事内容/笔法权威分离（骨架 prompt + 单卷 ME 池 prompt）
-- 骨架 + 逐卷 chunk 正常产出 → 确定性合并 → emit 两文件（与一把梭结构等价）
-- 逐卷 WAL（volume_arc_skeleton.json / volume_arc_v<N>.json）落盘
-- 断点续跑：合法 WAL 跳过不重复生成（mock 计数）；损坏 WAL 重生成；全 WAL 命中 = 幂等零调用
-- 合并 ME id 跨卷重复 → 硬报错非零退出 + 隔离 .dup_broken（不静默覆盖）
-- 单卷失败 = 整 step 失败（required 不降级），已完成卷 WAL 保留供续跑
-- --volumes 内部调试子集：只生成指定卷·不合并不落库
-- 结构破损 block 非零退出 + parse-失败重试自愈 + 破损诊断 dump
+零 LLM：单元 JSON 由测试直接落 WAL（模拟 novel-outline-planner MODE=volume_arc_unit
+亲笔产物）。验：
+- 单元缺失/破损 → 写 volume_arc_jobs.json 任务清单（unit/输入材料路径/期望产物路径/
+  输入 digest/诊断）+ exit 2=pending；合法 WAL 直接复用（幂等续跑）
+- 骨架就绪后才列出逐卷单元 job；破损单元退回 pending 重写
+- 全部单元合法 → 确定性合并 → emit 两文件（与一把梭结构等价）
+- 合并 ME id 跨卷重复 → 硬报错 exit 1 + 隔离 .dup_broken（不静默覆盖）
+- _metadata.cluster_count_per_volume 确定性覆盖（不靠 agent 自觉回填）
+- 创作约束已迁 agent 合约（novel-outline-planner.md）：权威分离/结构契约回归锁
+- 旧 LLM 生成管线清零（不兼容不降级）
 """
 import json
 import sys
@@ -21,14 +22,14 @@ _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 
 import gen_creative_volume_arc as gva  # noqa: E402  volume_arc 实现
-import llm_transport  # noqa: E402,F401  确保进 sys.modules 供 monkeypatch generate
+
+_AGENT_MD_PATH = _ROOT / ".claude" / "agents" / "novel-outline-planner.md"
 
 
 def _args(**kw):
     a = types.SimpleNamespace(
         project=None, selected_card=None, cluster_count=8, framework="三幕",
-        rhythm="标准", style_ref=None, research=None, dry_run=False, emit_to_db=False,
-        volumes=None)
+        rhythm=None, style_ref=None, research=None, emit_to_db=True)
     for k, v in kw.items():
         setattr(a, k, v)
     return a
@@ -44,17 +45,6 @@ _CLUSTER_001 = {
         "research_topics": ["开场节奏"],
         "researcher_confidence": 0.91,
     },
-}
-
-# 一把梭形态的完整输出（骨架校验会丢弃其中 major_events；chunk 校验只取 major_events）
-_VALID = {
-    "story_destiny": {"final_image": "终局", "thematic_resolution": "主题"},
-    "_metadata": {"rhythm_profile": "标准"},
-    "volumes": [{"vol": 1, "title": "第一卷", "phase": "起", "volume_core_conflict": "冲突",
-                 "volume_thread": "线索", "volume_finale_signal": "信号"}],
-    "major_events": [{"id": "ME-V1-01", "volume": 1, "title": "走向1",
-                      "is_volume_finale": True, "stakes_delta": "起点"}],
-    "cluster_001": _CLUSTER_001,
 }
 
 _SKELETON_2V = {
@@ -73,42 +63,24 @@ _SKELETON_1V = {**_SKELETON_2V, "volumes": [_SKELETON_2V["volumes"][0]]}
 
 
 def _chunk(vol: int, n_me: int = 2) -> dict:
-    """产一个合法单卷 ME 池 chunk（末个 is_volume_finale·每次调用产新对象防原地污染）。"""
+    """产一个合法单卷 ME 池单元（末个 is_volume_finale·每次调用产新对象防原地污染）。"""
     return {"volume": vol, "major_events": [
         {"id": f"ME-V{vol}-{i:02d}", "volume": vol, "title": f"走向{vol}-{i}",
          "is_volume_finale": i == n_me, "stakes_delta": "递增",
          "prerequisites": [], "physical_evidence": []} for i in range(1, n_me + 1)]}
 
 
-def _fake_generate_sequence(*payloads):
-    """序列返回：每次调用吐下一个 payload(dict→JSON / str→原文)·末个之后复用末个。
-    带 finish_reason='stop'(真实 GenResult 有·诊断 dump 读它)。gen._calls 供 mock 计数。"""
-    calls = {"n": 0}
-
-    def gen(loader, system, user, **kw):
-        i = min(calls["n"], len(payloads) - 1)
-        calls["n"] += 1
-        p = payloads[i]
-        text = p if isinstance(p, str) else json.dumps(p, ensure_ascii=False)
-        return types.SimpleNamespace(text=text, finish_reason="stop")
-    gen._calls = calls
-    return gen
-
-
-def _run(proj: Path, fake, **kw):
-    """monkeypatch llm_transport.generate 跑 _run_volume_arc（还原·防污染后续测试）。"""
-    _orig = llm_transport.generate
-    llm_transport.generate = fake
-    try:
-        return gva._run_volume_arc(_args(project=str(proj), emit_to_db=True, **kw))
-    finally:
-        llm_transport.generate = _orig
-
-
 def _mkproj(tmp: str) -> Path:
     proj = Path(tmp)
     (proj / "_数据库").mkdir(parents=True, exist_ok=True)
     return proj
+
+
+def _mkcard(proj: Path) -> Path:
+    card = proj / "card.json"
+    card.write_text(json.dumps({"answer": {"title": "钟楼弃儿"}}, ensure_ascii=False),
+                    encoding="utf-8")
+    return card
 
 
 def _write_wal(proj: Path, name: str, doc) -> Path:
@@ -120,62 +92,25 @@ def _write_wal(proj: Path, name: str, doc) -> Path:
     return p
 
 
-# ════════ prompt 层（北极星⑤ + 权威分离）════════
-
-def test_volume_arc_skeleton_prompt_no_schema_coercion():
-    """北极星⑤：骨架 prompt 含脚手架 + 作者档优先 + 不锁章铁律·不含枚举硬约束·
-    ME 池明确「逐卷另行生成」（P2 分卷纪律）。"""
-    system, user = gva.build_volume_arc_skeleton_prompt(
-        selected_card={"title": "卡", "logline": "梗概"}, cluster_count=8,
-        framework="三幕", rhythm="标准", author_block="（作者档）", research_text="")
-    for kw in ("story_destiny", "volumes", "cluster_001",
-               "in_medias_res", "research_ref", "第一权威", "free_notes"):
-        assert kw in system, f"脚手架缺 {kw}"
-    assert "绝不写" in system and "target_chapter" in system  # 不锁章铁律
-    assert "逐卷另行生成" in system, "骨架 prompt 须声明 ME 池分卷另行生成（不在骨架里产）"
-    for bad in ("phase 必须从", "finale_signal 必须含", "ME 数量必须"):
-        assert bad not in system, f"违北极星⑤·硬编码枚举规训: {bad}"
+def _run(proj: Path, **kw):
+    kw.setdefault("selected_card", str(_mkcard(proj)))
+    return gva._run_volume_arc(_args(project=str(proj), **kw))
 
 
-def test_volume_arc_story_content_from_card_not_style_ref():
-    """🔴 故事内容 vs 笔法 权威分离回归锁（防风格档示例故事污染大纲）。
-
-    prompt 必须明确『故事内容(题材/人物/世界/走向)唯一来源=灵感卡·作者档只学笔法·
-    示例里的人名/地名/情节是笔法演示禁当故事搬』。本测试锁该指令不被回退掉。"""
-    system, user = gva.build_volume_arc_skeleton_prompt(
-        selected_card={"title": "钟楼弃儿", "logline": "守夜人捡到未来遗嘱"}, cluster_count=10,
-        framework="Save the Cat", rhythm="混合",
-        author_block="（风格档·含「沙盒天道」示例）", research_text="")
-    assert "唯一来源" in system, "缺『故事内容唯一来源=灵感卡』指令"
-    assert "只学笔法" in system, "缺『作者风格档只学笔法』分离"
-    assert ("禁止" in system or "绝对禁止" in system), "缺禁止从风格档示例搬故事的护栏"
-    assert "钟楼弃儿" in user, "选定卡未进 user prompt"
+def _manifest(proj: Path) -> dict:
+    return json.loads((proj / "_数据库" / ".wal" / gva.VOLUME_ARC_JOBS_WAL)
+                      .read_text(encoding="utf-8"))
 
 
-def test_me_pool_prompt_scaffold_and_separation():
-    """单卷 ME 池 prompt：结构契约（id 格式/volume 标号/finale）+ 软提示不硬锁 +
-    权威分离 + 不锁章·前卷 digest 进 user（衔接防撞 id）。"""
-    system, user = gva.build_volume_me_pool_prompt(
-        volume=_SKELETON_2V["volumes"][1],
-        volumes_digest=gva._volumes_digest(_SKELETON_2V["volumes"]),
-        story_destiny=_SKELETON_2V["story_destiny"], cluster_count=8,
-        author_block="（作者档）", selected_card={"title": "钟楼弃儿"},
-        prev_me_digest="- 第 1 卷已定 2 个小走向：走向1-1、走向1-2")
-    for kw in ("major_events", "is_volume_finale", "stakes_delta", "ME-V2-",
-               "只学笔法", "软提示"):
-        assert kw in system, f"ME 池 prompt 缺 {kw}"
-    assert "绝不写" in system and "target_chapter" in system  # 不锁章铁律（卷 chunk 同守）
-    for bad in ("phase 必须从", "finale_signal 必须含", "ME 数量必须"):
-        assert bad not in system, f"违北极星⑤·硬编码枚举规训: {bad}"
-    assert "钟楼弃儿" in user and "第二卷" in user, "灵感卡/本卷骨架未进 user prompt"
-    assert "走向1-1" in user, "前卷 ME digest 未进 user prompt"
+def _jobs_by_unit(proj: Path) -> dict:
+    return {j["unit"]: j for j in _manifest(proj)["jobs"]}
 
 
-# ════════ 确定性结构层单元 ════════
+# ════════ 确定性结构层单元（单元验收唯一裁决·原样保留）════════
 
 def test_normalize_volume_chunk_backfill_and_reject():
     """ME 缺 volume → 确定性回填本卷号（C19 同源结构修补）；卷号错位/缺 id/chunk 内撞 id
-    → 判破损（None·触发重试/重生成）。"""
+    → 判破损（None·job 退回 pending 重写）。"""
     ok, diag = gva._normalize_volume_chunk(
         {"major_events": [{"id": "ME-V3-01", "title": "无volume字段",
                            "is_volume_finale": True}]}, 3)
@@ -193,8 +128,8 @@ def test_normalize_volume_chunk_backfill_and_reject():
 
 
 def test_normalize_volume_chunk_rejects_bad_finale_flag():
-    """单卷重试阶段回归锁：is_volume_finale 缺失/非 bool → 判破损（触发重试/重生成·
-    不放行到最终 emit 才炸未捕获 ValueError）。"""
+    """is_volume_finale 缺失/非 bool → 判破损（退回 pending·不放行到最终 emit 才炸
+    未捕获 ValueError）。"""
     missing, diag = gva._normalize_volume_chunk(
         {"major_events": [{"id": "ME-V3-01"}]}, 3)
     assert missing is None, f"缺 is_volume_finale 应判破损: {diag}"
@@ -204,7 +139,7 @@ def test_normalize_volume_chunk_rejects_bad_finale_flag():
 
 
 def test_normalize_volume_chunk_requires_exactly_one_finale():
-    """本卷 chunk 必须恰有一个 is_volume_finale=true（0 个或 ≥2 个都判破损·
+    """本卷单元必须恰有一个 is_volume_finale=true（0 个或 ≥2 个都判破损·
     与 _normalize_me_pool 的「卷末恰一个」规则对齐）。"""
     zero, diag = gva._normalize_volume_chunk(
         {"major_events": [{"id": "ME-V3-01", "is_volume_finale": False},
@@ -229,8 +164,7 @@ def test_normalize_volume_chunk_rejects_bad_prerequisites_type():
 
 
 def test_normalize_volume_chunk_rejects_dangling_prerequisites():
-    """prerequisites 引用本卷 + known_ids 之外的未知 id → 悬空引用判破损（不必等到全部卷
-    生成完毕的最终 emit 才炸出未捕获 ValueError）。"""
+    """prerequisites 引用本卷 + known_ids 之外的未知 id → 悬空引用判破损。"""
     dangling, diag = gva._normalize_volume_chunk(
         {"major_events": [{"id": "ME-V3-01", "is_volume_finale": True,
                            "prerequisites": ["ME-V9-99"]}]}, 3)
@@ -262,201 +196,176 @@ def test_merge_equivalent_to_monolithic_structure():
     # emit 两条路径产完全一致的 大势卡.json（结构等价的最终裁决）
     with tempfile.TemporaryDirectory() as ta, tempfile.TemporaryDirectory() as tb:
         gva._emit_volume_arc_to_db(Path(ta), json.loads(json.dumps(data)),
-                                  rhythm="标准", framework="三幕")
+                                   rhythm="标准", framework="三幕")
         gva._emit_volume_arc_to_db(Path(tb), json.loads(json.dumps(mono)),
-                                  rhythm="标准", framework="三幕")
+                                   rhythm="标准", framework="三幕")
         ja = (Path(ta) / "_数据库" / "大势卡.json").read_text(encoding="utf-8")
         jb = (Path(tb) / "_数据库" / "大势卡.json").read_text(encoding="utf-8")
-        assert ja == jb, "chunk 合并 emit 与一把梭 emit 的大势卡须逐字节一致"
+        assert ja == jb, "单元合并 emit 与一把梭 emit 的大势卡须逐字节一致"
 
 
-# ════════ 主流程：正常产出 / 破损 block / 重试自愈 ════════
+# ════════ 主流程：jobs pending / 续跑验收 / 合并 emit ════════
 
-def test_volume_arc_emit_splits_two_files():
-    """骨架 + 单卷 chunk（2 次调用）→ 合并 emit 大势卡/事件簇·WAL 双落盘。"""
+def test_fresh_run_registers_skeleton_job_and_pends():
+    """全新项目：骨架单元缺失 → 任务清单只含 skeleton pending + exit 2（等 agent 补件）。"""
     with tempfile.TemporaryDirectory() as tmp:
         proj = _mkproj(tmp)
-        card = proj / "card.json"
-        card.write_text(json.dumps({"answer": {"title": "卡"}}, ensure_ascii=False),
-                        encoding="utf-8")
-        fake = _fake_generate_sequence(_VALID)   # 骨架/chunk 都能吃 _VALID
-        rc = _run(proj, fake, selected_card=str(card))
+        rc = _run(proj)
+        assert rc == 2, "缺骨架单元应 exit 2=pending"
+        m = _manifest(proj)
+        assert m["contract"] == "volume_arc_jobs.v1"
+        assert m["agent"] == "novel-outline-planner"
+        assert m["agent_mode"] == "volume_arc_unit"
+        assert m["params"] == {"cluster_count": 8, "framework": "三幕", "rhythm": "标准"}
+        assert [j["unit"] for j in m["jobs"]] == ["skeleton"]
+        job = m["jobs"][0]
+        assert job["status"] == "pending" and "未落盘" in job["diag"]
+        assert job["expected_output"].endswith(gva.VOLUME_ARC_SKELETON_WAL)
+        assert job["inputs"]["selected_card"].endswith("card.json")
+        assert isinstance(job["input_digest"], str) and len(job["input_digest"]) == 64
+        assert not (proj / "_数据库" / "大势卡.json").exists(), "pending 不得落库"
+
+
+def test_skeleton_ready_lists_volume_jobs_and_pends():
+    """骨架单元合法（agent 已补件）→ 列出逐卷单元 job（含 skeleton/前卷 WAL 输入路径）
+    → 仍 pending 等卷单元。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = _mkproj(tmp)
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, _SKELETON_2V)
+        rc = _run(proj)
+        assert rc == 2
+        jobs = _jobs_by_unit(proj)
+        assert set(jobs) == {"skeleton", "v1", "v2"}
+        assert jobs["skeleton"]["status"] == "ready"
+        for u in ("v1", "v2"):
+            assert jobs[u]["status"] == "pending"
+            assert jobs[u]["inputs"]["skeleton"].endswith(gva.VOLUME_ARC_SKELETON_WAL)
+        assert jobs["v1"]["vol"] == 1 and jobs["v2"]["vol"] == 2
+        assert jobs["v1"]["expected_output"].endswith("volume_arc_v1.json")
+
+
+def test_all_units_ready_merges_and_emits():
+    """全部单元合法（agent 亲笔 WAL 齐）→ 确定性合并 emit 大势卡/事件簇 + 清单全 ready。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = _mkproj(tmp)
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, _SKELETON_2V)
+        _write_wal(proj, "volume_arc_v1.json", _chunk(1))
+        _write_wal(proj, "volume_arc_v2.json", _chunk(2))
+        rc = _run(proj)
         assert rc == 0
-        assert fake._calls["n"] == 2, "应恰 2 次调用（骨架 + 第 1 卷 chunk）"
-        wal = proj / "_数据库" / ".wal"
-        assert (wal / "volume_arc_skeleton.json").exists(), "骨架 WAL 未落盘"
-        assert (wal / "volume_arc_v1.json").exists(), "第 1 卷 chunk WAL 未落盘"
-        major = json.loads((proj / "_数据库" / "大势卡.json").read_text(encoding="utf-8"))
-        assert len(major["volumes"]) == 1 and len(major["major_events"]) == 1
-        assert major["major_events"][0]["status"] == "pending"
-        cluster = json.loads((proj / "_数据库" / "事件簇.json").read_text(encoding="utf-8"))
-        c0 = cluster["clusters"][0]
-        assert c0["cluster_id"] == "cluster_001" and c0["narrative_mode"] == "in_medias_res"
-        assert c0["status"] == "pending"  # step6 cluster_choice_apply 才改 in_progress
-        assert len(c0["scene_storyboard"]) == 1
-        assert c0["research_ref"]["cache_path"].endswith("inspiration_cluster_001_test.md")
-        assert c0["research_ref"]["anchors_used"] == ["anchor_A"]
-
-
-def test_volume_arc_broken_json_block_nonzero():
-    """契约3：结构破损(缺顶层键) block → 非零退出(不静默吞断链)。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        proj = _mkproj(tmp)
-        rc = _run(proj, _fake_generate_sequence({"volumes": []}))  # 缺键+卷空
-        assert rc == 1, "结构破损应 block 非零退出"
-        assert not (proj / "_数据库" / "大势卡.json").exists(), "破损不该落盘"
-
-
-def test_volume_arc_retry_recovers_from_transient_break():
-    """偶发非 JSON/限速截断 → parse 失败·重试自愈不 block。
-    序列：骨架破损 → 骨架合法 → 第 1 卷 chunk 合法（复用末 payload）→ rc==0 + 落盘。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        proj = _mkproj(tmp)
-        fake = _fake_generate_sequence({"volumes": []}, _VALID)  # 破损 → 合法
-        rc = _run(proj, fake)
-        assert rc == 0, "第二次合法应自愈 rc==0(不 block)"
-        assert fake._calls["n"] == 3, "骨架重试 1 次 + 骨架成功 + 1 卷 chunk = 共 3 次调用"
-        assert (proj / "_数据库" / "大势卡.json").exists(), "自愈后应落盘"
-
-
-def test_volume_arc_retry_exhausted_still_blocks():
-    """3 次全破损 → block exit 1(确定性破损不无限重试·不静默吞断链)·留 raw 诊断证据。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        proj = _mkproj(tmp)
-        fake = _fake_generate_sequence({"volumes": []})  # 每次都破损
-        rc = _run(proj, fake)
-        assert rc == 1, "3 次全破损应 block 非零退出"
-        assert fake._calls["n"] == 3, "应尝试满 3 次(MAX_VOL_ARC_TRIES)"
-        assert not (proj / "_数据库" / "大势卡.json").exists(), "破损不落盘"
-        dbg = proj / "_数据库" / ".wal" / "volume_arc_block_debug.txt"
-        assert dbg.exists(), "block 应留 raw 诊断证据(失败必记录学习·非静默吞证据)"
-
-
-def test_volume_arc_dry_run_no_api():
-    with tempfile.TemporaryDirectory() as tmp:
-        proj = _mkproj(tmp)
-        rc = gva._run_volume_arc(_args(project=str(proj), dry_run=True))
-        assert rc == 0
-
-
-# ════════ P2：分卷 WAL 断点续跑 ════════
-
-def test_multi_volume_chunk_wals_written_and_merged():
-    """逐卷 WAL 落盘：2 卷骨架 → v1/v2 chunk 各自落 WAL（schema 合法的部分产物）→
-    合并 emit 的 ME 按卷号升序、全量保留。"""
-    with tempfile.TemporaryDirectory() as tmp:
-        proj = _mkproj(tmp)
-        fake = _fake_generate_sequence(_SKELETON_2V, _chunk(1), _chunk(2))
-        rc = _run(proj, fake)
-        assert rc == 0 and fake._calls["n"] == 3
-        wal = proj / "_数据库" / ".wal"
-        for name in ("volume_arc_skeleton.json", "volume_arc_v1.json", "volume_arc_v2.json"):
-            assert (wal / name).exists(), f"缺 WAL: {name}"
-        v1 = json.loads((wal / "volume_arc_v1.json").read_text(encoding="utf-8"))
-        norm, diag = gva._normalize_volume_chunk(v1, 1)
-        assert norm is not None, f"落盘的卷 WAL 必须 schema 合法（可独立续跑）: {diag}"
+        assert all(j["status"] == "ready" for j in _manifest(proj)["jobs"])
         major = json.loads((proj / "_数据库" / "大势卡.json").read_text(encoding="utf-8"))
         ids = [m["id"] for m in major["major_events"]]
         assert ids == ["ME-V1-01", "ME-V1-02", "ME-V2-01", "ME-V2-02"], ids
         assert len(major["volumes"]) == 2
+        assert all(m["status"] == "pending" for m in major["major_events"])
+        cluster = json.loads((proj / "_数据库" / "事件簇.json").read_text(encoding="utf-8"))
+        c0 = cluster["clusters"][0]
+        assert c0["cluster_id"] == "cluster_001" and c0["narrative_mode"] == "in_medias_res"
+        assert c0["status"] == "pending"  # step6 cluster_choice_apply 才改 in_progress
+        assert c0["research_ref"]["cache_path"].endswith("inspiration_cluster_001_test.md")
+        assert c0["research_ref"]["anchors_used"] == ["anchor_A"]
 
 
-def test_resume_skips_completed_volume_wals():
-    """中断后续跑：已存在且合法的骨架 WAL + v1 WAL 直接复用（mock 计数=1·只生成 v2）。"""
+def test_broken_skeleton_unit_goes_back_to_pending():
+    """骨架单元破损（缺顶层键）→ 退回 pending + diag 带破损原因·不落库。"""
     with tempfile.TemporaryDirectory() as tmp:
         proj = _mkproj(tmp)
-        _write_wal(proj, "volume_arc_skeleton.json", _SKELETON_2V)
-        _write_wal(proj, "volume_arc_v1.json", _chunk(1))
-        fake = _fake_generate_sequence(_chunk(2))
-        rc = _run(proj, fake)
-        assert rc == 0
-        assert fake._calls["n"] == 1, "已完成卷不得重复生成（续跑只补缺卷）"
-        major = json.loads((proj / "_数据库" / "大势卡.json").read_text(encoding="utf-8"))
-        ids = [m["id"] for m in major["major_events"]]
-        assert ids == ["ME-V1-01", "ME-V1-02", "ME-V2-01", "ME-V2-02"], ids
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, {"volumes": []})
+        rc = _run(proj)
+        assert rc == 2
+        job = _jobs_by_unit(proj)["skeleton"]
+        assert job["status"] == "pending" and "破损" in job["diag"]
+        assert not (proj / "_数据库" / "大势卡.json").exists()
 
 
-def test_corrupt_volume_wal_regenerated():
-    """损坏的卷 WAL（非 JSON）→ 判破损重生成（不复用坏产物）。"""
+def test_broken_chunk_unit_goes_back_to_pending():
+    """卷单元破损（非 JSON）→ 退回 pending（重 spawn agent 覆写 expected_output）。"""
     with tempfile.TemporaryDirectory() as tmp:
         proj = _mkproj(tmp)
-        _write_wal(proj, "volume_arc_skeleton.json", _SKELETON_1V)
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, _SKELETON_1V)
         _write_wal(proj, "volume_arc_v1.json", "{{{ 不是 JSON")
-        fake = _fake_generate_sequence(_chunk(1))
-        rc = _run(proj, fake)
-        assert rc == 0
-        assert fake._calls["n"] == 1, "损坏 WAL 应触发恰 1 次重生成"
-        doc = json.loads((proj / "_数据库" / ".wal" / "volume_arc_v1.json")
-                         .read_text(encoding="utf-8"))
-        norm, diag = gva._normalize_volume_chunk(doc, 1)
-        assert norm is not None, f"重生成后的 WAL 须合法: {diag}"
+        rc = _run(proj)
+        assert rc == 2
+        job = _jobs_by_unit(proj)["v1"]
+        assert job["status"] == "pending" and "破损" in job["diag"]
+        # agent 补件（模拟）→ 重跑续跑验收通过
+        _write_wal(proj, "volume_arc_v1.json", _chunk(1))
+        assert _run(proj) == 0
         assert (proj / "_数据库" / "大势卡.json").exists()
 
 
-def test_idempotent_rerun_zero_llm_calls():
-    """幂等续跑：全部 WAL 已合法 → 重跑 0 次 LLM 调用·大势卡逐字节一致。"""
+def test_idempotent_rerun_after_complete():
+    """幂等续跑：全部单元合法 → 重跑仍 exit 0·大势卡逐字节一致·单元 WAL 不被改写。"""
     with tempfile.TemporaryDirectory() as tmp:
         proj = _mkproj(tmp)
-        rc = _run(proj, _fake_generate_sequence(_SKELETON_2V, _chunk(1), _chunk(2)))
-        assert rc == 0
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, _SKELETON_2V)
+        _write_wal(proj, "volume_arc_v1.json", _chunk(1))
+        p2 = _write_wal(proj, "volume_arc_v2.json", _chunk(2))
+        assert _run(proj) == 0
         p_major = proj / "_数据库" / "大势卡.json"
         first = p_major.read_text(encoding="utf-8")
-        fake2 = _fake_generate_sequence({"绝不应被调用": True})
-        rc2 = _run(proj, fake2)
-        assert rc2 == 0
-        assert fake2._calls["n"] == 0, "全 WAL 命中时重跑不得再调 LLM（幂等）"
+        wal_bytes = p2.read_bytes()
+        assert _run(proj) == 0
         assert p_major.read_text(encoding="utf-8") == first, "幂等重跑产物须逐字节一致"
+        assert p2.read_bytes() == wal_bytes, "合法单元 WAL 不得被改写（agent 产物只读复用）"
 
 
 def test_me_id_duplicate_across_volumes_hard_error():
-    """合并 ME id 去重校验：跨卷重复 id → 硬报错非零退出·不静默覆盖·不落大势卡·
-    隔离后到卷 WAL 为 .dup_broken（重跑重生成该卷·不死锁）。"""
+    """合并 ME id 去重校验：跨卷重复 id → 硬报错 exit 1·不静默覆盖·不落大势卡·
+    隔离后到卷 WAL 为 .dup_broken（重跑该卷退回 pending 重写·不死锁）。"""
     with tempfile.TemporaryDirectory() as tmp:
         proj = _mkproj(tmp)
-        _write_wal(proj, "volume_arc_skeleton.json", _SKELETON_2V)
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, _SKELETON_2V)
         _write_wal(proj, "volume_arc_v1.json", _chunk(1))
         _write_wal(proj, "volume_arc_v2.json", {"volume": 2, "major_events": [
             {"id": "ME-V1-01", "volume": 2, "title": "撞id走向", "is_volume_finale": True}]})
-        fake = _fake_generate_sequence({"绝不应被调用": True})
-        rc = _run(proj, fake)
+        rc = _run(proj)
         assert rc == 1, "跨卷 ME id 重复应硬报错非零退出"
-        assert fake._calls["n"] == 0
         assert not (proj / "_数据库" / "大势卡.json").exists(), "撞 id 不得静默覆盖落盘"
         wal = proj / "_数据库" / ".wal"
         assert (wal / "volume_arc_v2.json.dup_broken").exists(), "撞 id 卷 WAL 应被隔离"
-        assert not (wal / "volume_arc_v2.json").exists(), "隔离后原 WAL 应移走（重跑重生成）"
+        assert not (wal / "volume_arc_v2.json").exists(), "隔离后原 WAL 应移走"
         assert (wal / "volume_arc_v1.json").exists(), "首现卷 WAL 保留"
+        # 重跑：v2 退回 pending（等 agent 重写）
+        assert _run(proj) == 2
+        assert _jobs_by_unit(proj)["v2"]["status"] == "pending"
 
 
-def test_single_volume_failure_fails_step_keeps_wals():
-    """失败语义：v2 三次全破损 → 整 step 失败 rc==1（required 不降级），
-    但骨架 + v1 WAL 保留（续跑资产）·大势卡不落盘。"""
+def test_pending_units_require_readable_card():
+    """有待补单元但选中灵感卡不可读 → exit 1（agent 无故事内容来源·先修输入）。"""
     with tempfile.TemporaryDirectory() as tmp:
         proj = _mkproj(tmp)
-        fake = _fake_generate_sequence(_SKELETON_2V, _chunk(1), {"volumes": []})
-        rc = _run(proj, fake)
-        assert rc == 1, "单卷失败=整 step 失败"
-        assert fake._calls["n"] == 5, "骨架1 + v1成功1 + v2失败3 = 5 次调用"
-        wal = proj / "_数据库" / ".wal"
-        assert (wal / "volume_arc_skeleton.json").exists(), "骨架 WAL 应保留供续跑"
-        assert (wal / "volume_arc_v1.json").exists(), "已完成卷 WAL 应保留供续跑"
-        assert not (wal / "volume_arc_v2.json").exists(), "失败卷不得落 WAL"
-        assert not (proj / "_数据库" / "大势卡.json").exists(), "未齐全不得合并落盘"
+        rc = gva._run_volume_arc(_args(project=str(proj), selected_card=None))
+        assert rc == 1
 
 
-def test_volumes_debug_subset_no_merge():
-    """--volumes 内部调试子集：只生成指定卷·不触发合并落库（plan 不用此参数）。"""
+def test_complete_units_do_not_need_card():
+    """全部单元已合法时缺灵感卡不阻断（续跑合并无需再读故事来源）。"""
     with tempfile.TemporaryDirectory() as tmp:
         proj = _mkproj(tmp)
-        _write_wal(proj, "volume_arc_skeleton.json", _SKELETON_2V)
-        fake = _fake_generate_sequence(_chunk(1))
-        rc = _run(proj, fake, volumes="1")
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, _SKELETON_1V)
+        _write_wal(proj, "volume_arc_v1.json", _chunk(1))
+        rc = gva._run_volume_arc(_args(project=str(proj), selected_card=None))
         assert rc == 0
-        assert fake._calls["n"] == 1, "子集只生成第 1 卷"
-        wal = proj / "_数据库" / ".wal"
-        assert (wal / "volume_arc_v1.json").exists()
-        assert not (wal / "volume_arc_v2.json").exists()
-        assert not (proj / "_数据库" / "大势卡.json").exists(), "卷不齐全不得合并落库"
+
+
+def test_missing_project_exit1():
+    assert gva._run_volume_arc(_args(project=None)) == 1
+
+
+def test_metadata_cluster_count_deterministic_stamp():
+    """_metadata.cluster_count_per_volume 由 CLI 参数确定性覆盖（不靠 agent 回填·
+    cluster_emergence_engine 消费此键判卷末阈值）。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = _mkproj(tmp)
+        sk = json.loads(json.dumps(_SKELETON_1V))
+        sk["_metadata"] = {"rhythm_profile": "标准", "cluster_count_per_volume": 99}
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, sk)
+        _write_wal(proj, "volume_arc_v1.json", _chunk(1))
+        assert _run(proj, cluster_count=7) == 0
+        major = json.loads((proj / "_数据库" / "大势卡.json").read_text(encoding="utf-8"))
+        assert major["_metadata"]["cluster_count_per_volume"] == 7
 
 
 def test_emit_writes_rhythm_to_user_pref():
@@ -472,9 +381,84 @@ def test_emit_writes_rhythm_to_user_pref():
         pref = json.loads((tmp / "_数据库" / "用户偏好.json").read_text(encoding="utf-8"))
         assert pref.get("rhythm_profile") == "紧凑"
         mj = json.loads((tmp / "_数据库" / "大势卡.json").read_text(encoding="utf-8"))
-        assert mj["_metadata"].get("rhythm_profile") == "紧凑"   # 确定性覆盖非 LLM 自觉
+        assert mj["_metadata"].get("rhythm_profile") == "紧凑"   # 确定性覆盖非 agent 自觉
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_resolve_author_inputs_two_layouts():
+    """作者档路径解析：_数据库/作者风格.json 优先·项目根兜底·style_ref 存在才收。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = _mkproj(tmp)
+        assert gva._resolve_author_inputs(proj, None) == (None, None)
+        (proj / "作者风格.json").write_text("{}", encoding="utf-8")
+        prof, _ = gva._resolve_author_inputs(proj, None)
+        assert prof and prof.endswith("作者风格.json")
+        (proj / "_数据库" / "作者风格.json").write_text("{}", encoding="utf-8")
+        prof2, _ = gva._resolve_author_inputs(proj, str(proj / "不存在.md"))
+        assert prof2 and "_数据库" in prof2
+        skill_file = proj / "skill.md"
+        skill_file.write_text("# s", encoding="utf-8")
+        _, skill = gva._resolve_author_inputs(proj, str(skill_file))
+        assert skill and skill.endswith("skill.md")
+
+
+# ════════ 创作约束已迁 agent 合约（novel-outline-planner.md）·回归锁 ════════
+
+def _agent_md() -> str:
+    return _AGENT_MD_PATH.read_text(encoding="utf-8")
+
+
+def test_agent_contract_story_content_authority_separation():
+    """🔴 故事内容 vs 笔法 权威分离回归锁（feedback_volume_arc_style_ref_story_contamination·
+    防风格档示例故事污染大纲）。约束已从 prompt 迁入 agent 合约——锁合约文本不被回退掉。"""
+    md = _agent_md()
+    assert "唯一来源" in md, "缺『故事内容唯一来源=灵感卡』指令"
+    assert "只学笔法" in md, "缺『作者风格档只学笔法』分离"
+    assert "绝对禁止" in md, "缺禁止从风格档示例搬故事的护栏"
+    assert "沙盒天道" in md, "实证翻车案例（诡秘示例污染）应保留在合约里当警示"
+
+
+def test_agent_contract_volume_arc_unit_structure():
+    """volume_arc_unit 合约段：单元产物结构契约 + 不锁章铁律 + jobs 消费方式。"""
+    md = _agent_md()
+    for kw in ("volume_arc_unit", "UNIT", "JOBS_MANIFEST", "OUTPUT_PATH",
+               "story_destiny", "volume_core_conflict", "volume_thread",
+               "volume_finale_signal", "in_medias_res",
+               "ME-V<N>-<序>", "is_volume_finale", "stakes_delta", "prerequisites",
+               "prev_chunk_wals", "reference_patterns_block"):
+        assert kw in md, f"volume_arc_unit 合约缺 {kw}"
+    assert "target_chapter_count" in md and "绝不写" in md, "缺不锁章铁律"
+    assert "不输出 `major_events`" in md, "骨架单元须声明 ME 池逐卷另行亲笔"
+
+
+def test_agent_contract_brainstorm_constraints():
+    """brainstorm 合约段：灵感卡硬约束（长度上限/卷骨架/调研来源落地）齐全。"""
+    md = _agent_md()
+    for kw in ("brainstorm", "TOPIC", "RESEARCH_PATH", "OUTPUT_PATH",
+               "logline ≤50 字", "≤100 字", "5-6 卷", "source_refs",
+               "inspiration_cards.json"):
+        assert kw in md, f"brainstorm 合约缺 {kw}"
+    assert "真实存在于调研缓存" in md or "逐字复制" in md, "缺 source_refs 落地校验承诺"
+
+
+def test_agent_contract_no_enum_coercion():
+    """北极星⑤：合约给脚手架+字段语义·不硬编码枚举规训（惊悚乐园流水账覆辙）。"""
+    md = _agent_md()
+    for bad in ("phase 必须从", "finale_signal 必须含", "ME 数量必须"):
+        assert bad not in md, f"违北极星⑤·硬编码枚举规训: {bad}"
+
+
+def test_no_llm_pipeline_left_in_module():
+    """旧 LLM 生成管线清零（不兼容不降级·旧路径删干净）。"""
+    for gone in ("build_volume_arc_skeleton_prompt", "build_volume_me_pool_prompt",
+                 "_gen_volume_arc_unit", "_parse_volumes_arg", "MAX_VOL_ARC_TRIES",
+                 "_dump_volume_arc_debug", "_volumes_digest", "_prev_me_digest"):
+        assert not hasattr(gva, gone), f"旧 LLM 管线残留: {gone}"
+    src = (_ROOT / "core" / "scripts" / "gen_creative_volume_arc.py").read_text(encoding="utf-8")
+    for token in ("llm_transport", "GenModelLoader", "dry_run", "author_block",
+                  "volume_arc_block_debug"):
+        assert token not in src, f"gen_creative_volume_arc.py 残留旧管线引用: {token}"
 
 
 if __name__ == "__main__":

@@ -77,15 +77,14 @@ def test_gate_off_when_content_backend_unavailable():
 
 
 def test_embed_backend_env_var_no_longer_gates_classify():
-    """回归锁：EMBED_BACKEND / GEN_EMBED__* 环境变量对本工具门控没有任何作用——
+    """回归锁：EMBED_BACKEND 环境变量对本工具门控没有任何作用——
     唯一门控是 embedding_store.content_backend_available()。故意把风格门控会打开的
-    环境变量全设上，同时显式把内容后端强制关闭，断言 classify() 仍然 None：证明起作用的
+    环境变量设上，同时显式把内容后端强制关闭，断言 classify() 仍然 None：证明起作用的
     是 content_backend_available() 而不是环境变量（防止风格门控逻辑被挪回来）。
     """
     import embedding_store
     bak_eb = os.environ.get("EMBED_BACKEND")
     os.environ["EMBED_BACKEND"] = "mstyle"
-    os.environ["GEN_EMBED__X__API_KEY"] = "k"
     orig = embedding_store.content_backend_available
     embedding_store.content_backend_available = lambda: False
     try:
@@ -93,7 +92,6 @@ def test_embed_backend_env_var_no_longer_gates_classify():
         assert mod.classify_batch(["她笑了"], _PROTOTYPES) == [None]
     finally:
         embedding_store.content_backend_available = orig
-        os.environ.pop("GEN_EMBED__X__API_KEY", None)
         if bak_eb is not None:
             os.environ["EMBED_BACKEND"] = bak_eb
         else:

@@ -248,9 +248,6 @@ def test_skill_section_parser_and_keyword_scoring():
 
 def test_embedding_backend_is_off_without_configuration(monkeypatch):
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    for key in list(os.environ):
-        if key.startswith("GEN_EMBED__"):
-            monkeypatch.delenv(key, raising=False)
     assert loop._has_real_embedding_backend() is False
 
 

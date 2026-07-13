@@ -141,7 +141,7 @@ def discover_ai(styles_dir: Path, novels_dir: Path, extra_dir: Path | None
     三路负样本：
       · 复刻测试 replica（gemini 模仿作者·硬负样本·但单生成器·见 honest_note）
       · 小说草稿 draft（系统自产正文）
-      · --ai-extra-dir（gen_negatives.py 产的多生成器/同题材改写负样本·推荐主力）
+      · --ai-extra-dir（外部多生成器/同题材改写负样本·文件名约定 <author>__<gen>__NN.txt·推荐主力）
     """
     out = []
     for author_dir in sorted(styles_dir.iterdir()):
@@ -161,10 +161,10 @@ def discover_ai(styles_dir: Path, novels_dir: Path, extra_dir: Path | None
     if novels_dir.is_dir():
         for f in novels_dir.glob("**/*draft*.txt"):
             out.append((f.parts[len(novels_dir.parts)] if len(f.parts) > len(novels_dir.parts) else "novel", f))
-    # 外部生成负样本（多生成器·gen_negatives.py 产出）
+    # 外部生成负样本（多生成器·--ai-extra-dir ingest）
     if extra_dir and extra_dir.is_dir():
         for f in sorted(extra_dir.glob("**/*.txt")):
-            # 约定文件名前缀 = 来源作者/题材组（gen_negatives.py 写 <author>__<gen>__NN.txt）
+            # 约定文件名前缀 = 来源作者/题材组（<author>__<gen>__NN.txt）
             group = f.stem.split("__")[0] if "__" in f.stem else "synthetic"
             out.append((group, f))
     return out
@@ -282,7 +282,7 @@ def main():
     ap.add_argument("--max-chunks-per-ai-file", type=int, default=0,
                     help="0=用整文件；>0=每 AI 文件最多取前 N chunk")
     ap.add_argument("--ai-extra-dir", default="",
-                    help="额外负样本目录（gen_negatives.py 产的多生成器/同题材改写·推荐主力训练源）")
+                    help="额外负样本目录（外部多生成器/同题材改写·文件名 <author>__<gen>__NN.txt·推荐主力训练源）")
     ap.add_argument("--replicas-heldout-test", action="store_true",
                     help="把 41 个 gemini 复刻样本整体路由到 test 当『对抗硬集』（研究建议·"
                          "训练负样本则用 --ai-extra-dir）·防止检测器只学单生成器指纹")
@@ -319,7 +319,7 @@ def main():
     extra_name = extra_dir.name if extra_dir else None
     for r in ai_recs:
         fname = r["source"].rsplit("/", 1)[-1]
-        # gen_negatives.py 写 <author>__<gen>__NN.txt；或落在 --ai-extra-dir 目录下
+        # 外部生成负样本命名 <author>__<gen>__NN.txt；或落在 --ai-extra-dir 目录下
         if "__" in fname or (extra_name and f"/{extra_name}/" in r["source"]):
             r["kind"] = "ai_generated"
         elif "draft" in r["source"]:
@@ -382,7 +382,7 @@ def main():
             "AI 负样本仅来自 gemini（线上同一生成器）且都在模仿这 10 位作者——"
             "检测器可能学到的是『gemini 腔』而非泛化『AI 腔』，且存在作者身份捷径风险。"
             "缓解：①train.py 用 focal loss+加权采样不丢数据；②跑 --split-mode by_author "
-            "看跨作者泛化；③后续可用 gen_negatives.py 引入多生成器/同题材改写负样本。"),
+            "看跨作者泛化；③后续可经 --ai-extra-dir 引入外部多生成器/同题材改写负样本。"),
     }
     (out_dir / "meta.json").write_text(
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")

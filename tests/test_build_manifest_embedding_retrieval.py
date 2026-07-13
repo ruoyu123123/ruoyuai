@@ -42,8 +42,6 @@ def _char_freq_embedding(text: str, dim: int = 64) -> list:
 
 def _clear_embed_env(monkeypatch):
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    for k in [k for k in os.environ if k.startswith("GEN_EMBED__")]:
-        monkeypatch.delenv(k, raising=False)
 
 
 def _rm(td):
@@ -61,9 +59,6 @@ def test_has_real_embedding_backend_gate(monkeypatch):
     monkeypatch.setenv("EMBED_BACKEND", "hash")
     assert bm._has_real_embedding_backend() is False
     monkeypatch.setenv("EMBED_BACKEND", "mstyle")
-    assert bm._has_real_embedding_backend() is True
-    monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    monkeypatch.setenv("GEN_EMBED__test__API_KEY", "fake")
     assert bm._has_real_embedding_backend() is True
 
 

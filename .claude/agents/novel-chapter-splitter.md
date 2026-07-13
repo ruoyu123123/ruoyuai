@@ -106,11 +106,11 @@ python core/scripts/chapter_splitter.py "<PROJECT>" --mode ecas_freestyle \
   "pending_tail": { "exists": <bool>, "cjk": <int>, "path": "章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt | null" },
   "splitter_wal": "_数据库/.wal/splitter_cluster_<key>_decisions.json",
   "files_written": [ "章节/第NNN章/第NNN章.txt", ... ],
-  "next_action": "cluster-write step 6.2 gen_chapter_titles → 6.3 split_cluster_changes 平铺"
+  "next_action": "cluster-write step 6.2 章标题三段式（gen_chapter_titles --emit-brief → spawn novel-titler → --apply）→ 6.3 split_cluster_changes 平铺"
 }
 ```
 
-> 切章后**章标题重生 + per-chapter changes 平铺由 `/cluster-write` 调度器后续步骤负责**（step 6.2 `gen_chapter_titles.py` 三档策略 / step 6.3 `split_cluster_changes.py`），**不属本 agent 职责**——本 agent 只切正文 + 落 splitter WAL（WAL 的 `chapter_range` / `pending_tail` 字段供后续步骤消费）。
+> 切章后**章标题重生 + per-chapter changes 平铺由 `/cluster-write` 调度器后续步骤负责**（step 6.2 章标题三段式：`gen_chapter_titles.py --emit-brief` 确定性产 brief → 主代理 spawn `novel-titler` 亲笔命名 → `--apply` 确定性验收；step 6.3 `split_cluster_changes.py`），**不属本 agent 职责**——本 agent 只切正文 + 落 splitter WAL（WAL 的 `chapter_range` / `pending_tail` 字段供后续步骤消费）。
 
 ## ecas_freestyle 核心规则
 
@@ -130,7 +130,7 @@ python core/scripts/chapter_splitter.py "<PROJECT>" --mode ecas_freestyle \
 - ❌ **不修改正文内容** —— 脚本只切割不重写；正文质量问题是 cluster 视野 scanner（已在 cluster-write 前序步骤跑完）的事。
 - ❌ **不碰 changes.json** —— `cluster_<key>_changes.json` 由 writer 写、由 step 6.3 `split_cluster_changes.py` 平铺，本 agent 不读不写不搬。
 - ❌ **不打 gate_level / 不写 waivers** —— 本 agent 是纯切割 wrapper，不做质量裁决；audit_hub 的 advisory/hard_gate 与本 agent 无关。
-- ❌ **不调 splitter 之外的脚本** —— 章标题（`gen_chapter_titles.py`）、changes 平铺（`split_cluster_changes.py`）由主代理在后续 step 调，本 agent 不代调。
+- ❌ **不调 splitter 之外的脚本、不 spawn 其他 agent** —— 章标题三段式（`gen_chapter_titles.py --emit-brief/--apply` + `novel-titler`）、changes 平铺（`split_cluster_changes.py`）由主代理在后续 step 调度，本 agent 不代调。
 
 ## 失败处理
 
@@ -152,7 +152,7 @@ python core/scripts/chapter_splitter.py "<PROJECT>" --mode ecas_freestyle \
  │      ↓ step 6.1
  ├── spawn novel-chapter-splitter（本 agent） ★ —— chapter_splitter.py --mode ecas_freestyle 按字数切
  │      ↓ 落各章正文 + splitter WAL（chapter_range / pending_tail）
- ├── step 6.2 gen_chapter_titles.py       （三档网文化章标题重生）
+ ├── step 6.2 章标题三段式（gen_chapter_titles.py --emit-brief → spawn novel-titler 亲笔命名 → --apply 确定性验收）
  └── step 6.3 split_cluster_changes.py    （cluster_changes 按切点平铺成 N 个 _changes.json）
 ```
 

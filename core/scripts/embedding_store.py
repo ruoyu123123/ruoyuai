@@ -42,12 +42,13 @@ def cosine_similarity(v1: list[float], v2: list[float]) -> float:
     return sum(a * b for a, b in zip(v1, v2))
 
 
-# ── 真语义 embedding 后端（opt-in · 用户配置 API 才启用）──────
-# 降级链：通义/OpenAI兼容 embedding API（.env GEN_EMBED__*）→ 本地 sentence-transformers → hash。
+# ── 真语义 embedding 后端（opt-in · 全本地）──────
+# 后端链：本地 sentence-transformers（mstyle/ruoyu_style/local bge）→ hash 兜底。
 # 消费方（build_manifest RAG / voice drift）统一走 compute_embedding；
-# 默认无 key + 无本地包 → hash；配 .env 的 GEN_EMBED key 自动启用真语义。
-# ⚠️ 切换后端会改变维度（hash 384 / bge 512 / 通义 1024）→ 必须重建缓存（rebuild 写 .embed_manifest.json
-#    记 method+dim；cosine 维度不等返回 0，drift 会显示 sim 异常提示重建）。
+# 默认无本地包/未显式 opt-in → hash。
+# ⚠️ 切换后端会改变维度（hash 384 / bge 512 / mstyle·ruoyu_style 768）→ 必须重建缓存
+#    （rebuild 写 .embed_manifest.json 记 method+dim；cosine 维度不等返回 0，
+#    drift 会显示 sim 异常提示重建）。
 _BACKEND = None          # (method:str, dim:int, fn) 探测缓存
 _LOCAL_MODEL = None      # 本地 sentence-transformers 模型 lazy 缓存
 _MSTYLE_MODEL = None     # StyleDistance/mstyledistance 模型 lazy 缓存（真风格语义·CPU）
@@ -55,60 +56,6 @@ _MSTYLE_MODEL = None     # StyleDistance/mstyledistance 模型 lazy 缓存（真
 
 def _embed_repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
-
-
-def _load_embed_profile() -> "dict | None":
-    """读 .env 的 GEN_EMBED__<name>__{BASE_URL,API_KEY,MODEL,DIM}（同 gen_model_loader 模式）。
-    GEN_EMBED_ACTIVE 指定用哪个 profile；缺则取第一个。字段不全 → None（降级本地/hash）。"""
-    env_path = None
-    for cand in (Path(".env"), _embed_repo_root() / ".env"):
-        if cand.exists():
-            env_path = cand
-            break
-    if env_path is None:
-        return None
-    try:
-        text = env_path.read_text(encoding="utf-8")
-    except Exception:
-        return None
-    profiles: dict = {}
-    active = None
-    for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("#") or not line:
-            continue
-        m_act = re.match(r"GEN_EMBED_ACTIVE\s*=\s*(.+)", line)
-        if m_act:
-            active = m_act.group(1).strip()
-            continue
-        m = re.match(r"^GEN_EMBED__(.+?)__([A-Z_]+)\s*=\s*(.*?)\s*$", line)
-        if m:
-            name, field, val = m.group(1), m.group(2).lower(), m.group(3).strip()
-            profiles.setdefault(name, {})[field] = val
-    if not profiles:
-        return None
-    name = active if (active and active in profiles) else next(iter(profiles))
-    p = profiles[name]
-    if not (p.get("api_key") and p.get("base_url") and p.get("model")):
-        return None
-    p["name"] = name
-    p["dim"] = int(p["dim"]) if str(p.get("dim", "")).isdigit() else 1024
-    return p
-
-
-def _api_embed(profile: dict, text: str) -> list[float]:
-    from openai import OpenAI
-    client = OpenAI(api_key=profile["api_key"], base_url=profile["base_url"])
-    kwargs = {"model": profile["model"], "input": text[:8000]}
-    if profile.get("dim"):
-        kwargs["dimensions"] = profile["dim"]   # 通义 text-embedding-v4 支持自定义维度
-    resp = client.embeddings.create(**kwargs)
-    vec = list(resp.data[0].embedding)
-    # L2 归一化：cosine_similarity 是假设输入已归一的纯点积，其余后端均已归一，API 后端必须对齐
-    norm = math.sqrt(sum(v * v for v in vec))
-    if norm > 0:
-        vec = [v / norm for v in vec]
-    return vec
 
 
 def _local_embed(text: str) -> list[float]:
@@ -284,27 +231,20 @@ def _detect_backend():
 
     🔴 真语义是 **opt-in**：默认 hash（零回归 · 与现有缓存维度一致 · 即使环境恰好装了
     sentence-transformers 也不自动切，避免「维度混用导致 cosine=0 → voice drift/RAG 静默失效」+
-    「首次 encode 触发模型下载拖慢流水线」）。只有用户显式配置才启用真语义：
-      ① .env 配 GEN_EMBED__* key → 通义/OpenAI 兼容 API
-      ② 环境变量 EMBED_BACKEND=mstyle（且装了 sentence-transformers）→ StyleDistance/mstyledistance
+    「首次 encode 触发模型下载拖慢流水线」）。只有用户显式设 EMBED_BACKEND 才启用真语义（全本地）：
+      ① EMBED_BACKEND=mstyle（且装了 sentence-transformers）→ StyleDistance/mstyledistance
          （ACL2025 真风格语义 · content-independent · 含中文 · CPU · 风格相似度最对口）
-      ②.5 环境变量 EMBED_BACKEND=ruoyu_style（NN风格声纹集成）→ 本仓 fine-tune
+      ② EMBED_BACKEND=ruoyu_style（NN风格声纹集成）→ 本仓 fine-tune
          风格模型（runs/style_embed_v1/final·dim 768）经 venv py3.10 subprocess 桥编码
          （系统 py3.14 无 torch·故不直接 import·走 ruoyu_style_encode_batch）。venv/模型缺
          → 降级 hash（默认安全·零崩）。
-      ③ 环境变量 EMBED_BACKEND=local（且装了 sentence-transformers）→ 本地 bge（内容语义）
+      ③ EMBED_BACKEND=local（且装了 sentence-transformers）→ 本地 bge（内容语义）
     切换后端务必先 `embedding_store.py <proj> rebuild` 重建缓存（维度变了）。"""
     global _BACKEND
     if _BACKEND is not None:
         return _BACKEND
-    # ① 用户显式配 GEN_EMBED API
-    prof = _load_embed_profile()
-    if prof:
-        _BACKEND = (f"api:{prof['model']}", prof["dim"], lambda t: _api_embed(prof, t))
-        print(f"[embedding_store] 后端=API {prof['model']} (dim={prof['dim']}) · 切后端记得 rebuild", file=sys.stderr)
-        return _BACKEND
     _eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    # ② 用户显式 EMBED_BACKEND=mstyle + 装了包（真风格语义·风格相似度首选）
+    # ① 用户显式 EMBED_BACKEND=mstyle + 装了包（真风格语义·风格相似度首选）
     if _eb == "mstyle":
         try:
             import sentence_transformers  # noqa: F401
@@ -313,9 +253,9 @@ def _detect_backend():
             return _BACKEND
         except ImportError:
             print("[embedding_store] EMBED_BACKEND=mstyle 但未装 sentence-transformers，降级 hash", file=sys.stderr)
-    # ②.5 🔴 NN风格声纹集成 · EMBED_BACKEND=ruoyu_style → 本仓 fine-tune 风格模型
-    #      （venv subprocess 桥·系统 py3.14 无 torch·见上方 ruoyu_style_encode_batch）。
-    #      默认安全：venv 或模型缺 → 降级 hash（保持 dim 384 一致·零崩）。
+    # ② 🔴 NN风格声纹集成 · EMBED_BACKEND=ruoyu_style → 本仓 fine-tune 风格模型
+    #    （venv subprocess 桥·系统 py3.14 无 torch·见上方 ruoyu_style_encode_batch）。
+    #    默认安全：venv 或模型缺 → 降级 hash（保持 dim 384 一致·零崩）。
     if _eb == "ruoyu_style":
         dim = ruoyu_style_dim("author")
         vpy = _ruoyu_venv_python()
@@ -440,14 +380,6 @@ def _backend_batch_compute(method: str, fn, texts: "list[str]") -> "list[list[fl
     if method.startswith("ruoyu_style:"):
         embs = ruoyu_style_encode_batch(texts, model="author")
         return list(embs) if embs else [None] * len(texts)
-    if method.startswith("api:"):
-        prof = _load_embed_profile()
-        if prof:
-            try:
-                return _api_embed_batch(prof, texts)
-            except Exception as e:  # noqa: BLE001 — API 批量失败整批 None（调用方 hash 兜底）
-                print(f"[embedding_store] API 批量失败: {str(e)[:120]}", file=sys.stderr)
-                return [None] * len(texts)
     # mstyle/local：模型已常驻进程内，逐条即批量（sentence-transformers 内部自带 batch）
     out: "list[list[float] | None]" = []
     for t in texts:
@@ -456,26 +388,6 @@ def _backend_batch_compute(method: str, fn, texts: "list[str]") -> "list[list[fl
             out.append(v if v else None)
         except Exception:  # noqa: BLE001
             out.append(None)
-    return out
-
-
-def _api_embed_batch(profile: dict, texts: "list[str]") -> "list[list[float] | None]":
-    """OpenAI 兼容 embeddings API 原生支持 list input——一次请求编整批。逐条 L2 归一。"""
-    from openai import OpenAI
-    client = OpenAI(api_key=profile["api_key"], base_url=profile["base_url"])
-    kwargs = {"model": profile["model"], "input": [(t or "")[:8000] for t in texts]}
-    if profile.get("dim"):
-        kwargs["dimensions"] = profile["dim"]
-    resp = client.embeddings.create(**kwargs)
-    by_index: "dict[int, list[float]]" = {d.index: list(d.embedding) for d in resp.data}
-    out: "list[list[float] | None]" = []
-    for i in range(len(texts)):
-        vec = by_index.get(i)
-        if vec:
-            norm = math.sqrt(sum(v * v for v in vec))
-            if norm > 0:
-                vec = [v / norm for v in vec]
-        out.append(vec)
     return out
 
 
@@ -672,7 +584,7 @@ def assert_mstyle_backend():
     """硬断言当前 embedding 后端真是 mstyle 且 import 成功（供 dev/蒸馏态的风格余弦消费方调用）。
 
     🔴 绝不静默降级 hash 冒充风格余弦（hash 是 md5 ngram 袋·风格语义=0）。
-    返回 (method, dim)；非 mstyle / 未装 sentence-transformers / 被 .env GEN_EMBED 抢占 → raise。
+    返回 (method, dim)；非 mstyle / 未装 sentence-transformers → raise。
     ⚠️ 只在 dev/蒸馏工作站态调用——frozen 写作态不含 torch 依赖，消费方须先 is_frozen() 跳过（绝不崩写作流水线）。
     """
     eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
@@ -684,7 +596,7 @@ def assert_mstyle_backend():
         raise MstyleBackendError(f"EMBED_BACKEND=mstyle 但未装 sentence-transformers：{e}")
     method, dim, _ = _detect_backend()
     if not method.startswith("mstyle:"):
-        raise MstyleBackendError(f"后端探测未落到 mstyle（method={method}）——可能 .env GEN_EMBED 抢占")
+        raise MstyleBackendError(f"后端探测未落到 mstyle（method={method}）")
     return method, dim
 
 

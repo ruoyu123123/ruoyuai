@@ -2,7 +2,9 @@
 
 outline_card is not a public CLI mode: direction cards must flow through
 cluster_emergence_engine + novel-outline-planner + cluster user_choice
-artifacts. Tests lock that rejection plus the volume_arc structural guards.
+artifacts. Tests lock that rejection, the brainstorm --verify machine gate
+(cards are authored by novel-outline-planner MODE=brainstorm), plus the
+volume_arc structural guards.
 """
 import json
 import sys
@@ -125,12 +127,167 @@ def test_emit_volume_arc_empty_and_missing_major_events():
 
 
 # ════════════════════════════════════════════════════════════════
+# brainstorm --verify 确定性验收门（卡由 novel-outline-planner 亲笔）
+# ════════════════════════════════════════════════════════════════
+
+_URL_A = "https://example.com/hot-topic-2026"
+_URL_B = "https://example.com/genre-analysis"
+
+
+def _good_card(cid: str, refs=None) -> dict:
+    return {
+        "card_id": cid,
+        "title": f"卡{cid}",
+        "logline": "钟楼守夜人捡到写着自己死期的未来遗嘱",
+        "core_mechanism": "每敲一次钟就消耗一段他人记忆，钟声能改写小范围因果",
+        "volume_skeleton": [
+            {"vol": v, "title": f"卷{v}", "archetype": "守夜人", "climax": f"高潮{v}"}
+            for v in range(1, 6)
+        ],
+        "selling_point": "贴悬疑+规则怪谈线（引用调研：热帖里的时间诡计需求）",
+        "risk": "倒叙开场信息量大 → 首块 200 字内丢核心悬念",
+        "source_refs": refs if refs is not None else [_URL_A],
+    }
+
+
+def _cards_doc(n: int = 3) -> dict:
+    return {"version": 1, "topic": "末世/钟楼/规则怪谈",
+            "cards": [_good_card(c) for c in "ABC"[:n]]}
+
+
+_RESEARCH_TEXT = f"""# Research: 钟楼
+## Findings
+- 热帖趋势 — 时间诡计需求上升。Source: [t]({_URL_A})
+## Sources
+1. [t]({_URL_A})
+2. [g]({_URL_B})
+"""
+
+
+def _verify_doc(doc, count=3, research_text=_RESEARCH_TEXT):
+    return gc.verify_brainstorm_cards(doc, count=count, research_text=research_text)
+
+
+def test_brainstorm_verify_accepts_valid_cards():
+    assert _verify_doc(_cards_doc()) == []
+
+
+def test_brainstorm_verify_rejects_wrong_count():
+    errs = _verify_doc(_cards_doc(2))
+    assert errs and any("恰 3 张" in e for e in errs)
+
+
+def test_brainstorm_verify_rejects_missing_keys_and_dup_ids():
+    doc = _cards_doc()
+    del doc["cards"][0]["risk"]
+    doc["cards"][1]["card_id"] = "A"   # 与 cards[0] 撞 id
+    errs = _verify_doc(doc)
+    assert any("缺必备键" in e and "risk" in e for e in errs)
+    assert any("card_id 重复" in e for e in errs)
+
+
+def test_brainstorm_verify_rejects_over_length():
+    doc = _cards_doc()
+    doc["cards"][0]["logline"] = "长" * 51
+    doc["cards"][1]["core_mechanism"] = "长" * 101
+    errs = _verify_doc(doc)
+    assert any("logline 超长" in e for e in errs)
+    assert any("core_mechanism 超长" in e for e in errs)
+
+
+def test_brainstorm_verify_rejects_bad_volume_skeleton():
+    doc = _cards_doc()
+    doc["cards"][0]["volume_skeleton"] = doc["cards"][0]["volume_skeleton"][:4]  # 4 卷
+    doc["cards"][1]["volume_skeleton"] = [{"vol": v} for v in range(1, 8)]       # 7 卷
+    doc["cards"][2]["volume_skeleton"] = ["裸串"]                                 # 非 object
+    errs = _verify_doc(doc)
+    assert sum("volume_skeleton" in e for e in errs) >= 3
+
+
+def test_brainstorm_verify_rejects_fabricated_source_url():
+    """source_refs 逐条 URL 必须真实存在于调研缓存——凭记忆编造 = 机器门拒收。"""
+    doc = _cards_doc()
+    doc["cards"][0]["source_refs"] = ["https://made-up.example.org/fake"]
+    errs = _verify_doc(doc)
+    assert any("不存在于调研缓存" in e for e in errs)
+    # 真实存在的第二条 URL 合法
+    doc2 = _cards_doc()
+    doc2["cards"][0]["source_refs"] = [_URL_A, _URL_B]
+    assert _verify_doc(doc2) == []
+
+
+def test_brainstorm_verify_rejects_empty_source_refs():
+    doc = _cards_doc()
+    doc["cards"][0]["source_refs"] = []
+    errs = _verify_doc(doc)
+    assert any("source_refs" in e for e in errs)
+
+
+def test_brainstorm_verify_cli_end_to_end(tmp_path=None):
+    """CLI 端到端：agent 落盘的卡 + 调研缓存 → exit 0 + 盖 _meta 验收章（归一严格 JSON）；
+    破损卡 → exit 2（主代理重 spawn planner）。"""
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        research = d / "inspiration_synthesis.json"
+        research.write_text(_RESEARCH_TEXT, encoding="utf-8")
+        cards = d / "inspiration_cards.json"
+        cards.write_text(json.dumps(_cards_doc(), ensure_ascii=False), encoding="utf-8")
+        code = _run_main(["gen_creative.py", "--mode", "brainstorm", "--verify",
+                          "--cards", str(cards), "--count", "3",
+                          "--research", str(research)])
+        assert code in (None, 0), f"合法卡应验收通过，实得 {code}"
+        stamped = json.loads(cards.read_text(encoding="utf-8"))
+        assert stamped["_meta"]["verified_by"] == "gen_creative.brainstorm.verify"
+        assert stamped["_meta"]["authored_by"] == "novel-outline-planner"
+        # 破损卡（少 1 张）→ exit 2
+        cards.write_text(json.dumps(_cards_doc(2), ensure_ascii=False), encoding="utf-8")
+        code2 = _run_main(["gen_creative.py", "--mode", "brainstorm", "--verify",
+                           "--cards", str(cards), "--count", "3",
+                           "--research", str(research)])
+        assert code2 == 2, f"破损卡应 exit 2 供重 spawn，实得 {code2}"
+
+
+def test_brainstorm_verify_missing_cards_exit2_missing_research_exit1():
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td)
+        research = d / "syn.json"
+        research.write_text(_RESEARCH_TEXT, encoding="utf-8")
+        # 卡未落盘（agent 未产出）→ 2
+        code = _run_main(["gen_creative.py", "--mode", "brainstorm", "--verify",
+                          "--cards", str(d / "nope.json"), "--count", "3",
+                          "--research", str(research)])
+        assert code == 2
+        # 调研缓存缺失（重 spawn planner 修不了）→ 1
+        cards = d / "cards.json"
+        cards.write_text(json.dumps(_cards_doc(), ensure_ascii=False), encoding="utf-8")
+        code2 = _run_main(["gen_creative.py", "--mode", "brainstorm", "--verify",
+                           "--cards", str(cards), "--count", "3",
+                           "--research", str(d / "gone.json")])
+        assert code2 == 1
+
+
+def test_brainstorm_cli_requires_verify():
+    """旧 LLM 生成入口已删：--mode brainstorm 不带 --verify → 响亮 exit 1。"""
+    code = _run_main(["gen_creative.py", "--mode", "brainstorm", "--cards", "x.json"])
+    assert code == 1, f"缺 --verify 应响亮拒绝 exit 1，实得 {code}"
+
+
+def test_volume_arc_rejects_verify_flag():
+    """--mode volume_arc 自带单元验收（jobs pending 范式）→ --verify 组合响亮拒绝。"""
+    code = _run_main(["gen_creative.py", "--mode", "volume_arc", "--verify",
+                      "--project", "x"])
+    assert code == 1
+
+
+# ════════════════════════════════════════════════════════════════
 # import 守卫
 # ════════════════════════════════════════════════════════════════
 
 def test_module_imports():
-    """模块可 import（无语法/引用错）。"""
+    """模块可 import（无语法/引用错）+ 验收器 API 存在。"""
     assert hasattr(gc, "main")
+    assert hasattr(gc, "verify_brainstorm_cards")
+    assert hasattr(gc, "verify_distill_skill_text")
     assert hasattr(gva, "_emit_volume_arc_to_db")
 
 

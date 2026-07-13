@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-gen_model_loader.py — 多 profile loader + fallback 链（gen_writer/gen_fixer/gen_creative 共用）
+gen_model_loader.py — 多 profile loader + fallback 链（gen_writer/gen_fixer 等润色链共用）
 
 设计：
 - .env 中所有 GEN__<name>__<FIELD>=<value> 解析为 profile dict

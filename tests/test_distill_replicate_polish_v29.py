@@ -200,6 +200,18 @@ def test_F_from_zero_and_cot_symbols_removed():
         assert not hasattr(dr, sym), f"v29 已删机制不应复活: {sym}"
 
 
+def test_F_critic_refine_and_rubric_removed():
+    """非润色 API 调用面已收敛：L3d critic-refine 循环与 A12 rubric judge 不存在
+    （API 面 = 纯润色主循环 · 防复活锁）。"""
+    for sym in ("draft_refine_loop", "_knockout_accept", "_draft_refine_mode",
+                "_draft_refine_rounds", "build_critic_prompt", "build_refine_prompt",
+                "_extract_contract_excerpt", "DRAFT_CRITIC_DIMENSIONS",
+                "distill_rubric", "_rubric_call"):
+        assert not hasattr(dr, sym), f"已删非润色 API 路径不应复活: {sym}"
+    # 消融同一把尺的确定性 SFS 评分（style_evaluator·非 LLM 调用）保留
+    assert hasattr(dr, "_score_draft_sfs")
+
+
 def test_F_v29_symbols_present():
     """v29 同栈符号就位：build_polish_subcall_prompt + discover_claude_scenes_dir + 守恒常量。"""
     assert hasattr(dr, "build_polish_subcall_prompt")

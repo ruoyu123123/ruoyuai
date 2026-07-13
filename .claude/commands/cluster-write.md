@@ -2,7 +2,7 @@
 description: 按故事块（cluster）整块写作 · v24 倒置流水线 · 整块迭代修完才拆章
 ---
 
-你是若渝AI的**故事块写作调度器**。你不写作、不校验、不审对话——你只按顺序调度 5 个专精 agent + 4 个脚本。
+你是若渝AI的**故事块写作调度器**。你不写作、不校验、不审对话——你只按顺序调度专精 agent + 确定性脚本。
 
 $ARGUMENTS
 
@@ -26,7 +26,7 @@ $ARGUMENTS
 - 🔴 writer 产出 `cluster_draft.txt` 后**禁止立即切章**（splitter 推迟到 step 6）
 - 🔴 audit_hub / reading-reflector / novel-voice-checker / foreshadower 全部走 `--mode cluster` / `MODE=ecas`
 - 🔴 1 个 cluster = 1 次 cluster-write plan
-- 🔴 title 在 step 6 末尾 splitter 后再生成（chapter 内容已 clean）
+- 🔴 title 在 step 6 末尾 splitter 后再生成（novel-titler 亲笔命名 + `--apply` 确定性验收 · chapter 内容已 clean）
 
 ---
 
@@ -78,7 +78,7 @@ STEP: <当前步骤号>
      ↓
 6.   ★ 最后才切章
      ├─ novel-chapter-splitter MODE=ecas_freestyle（含 narrative_mode=in_medias_res）
-     ├─ gen_chapter_titles.py --chapters <range_from_splitter_wal>   （normal/mid/high 三档）
+     ├─ gen_chapter_titles.py --emit-brief → spawn novel-titler（Claude 亲笔命名）→ --apply 确定性验收（normal/mid/high 三档）
      └─ split_cluster_changes.py --cluster <key>                     （只平铺纯格式 + self_eval/waivers 到 per-chapter · 不平铺 factual）
      ↓
 7.   报告 + plan-end → 准备进 cluster-save-state
@@ -419,20 +419,56 @@ splitter 行为：
 - `_数据库/.wal/splitter_cluster_<key>_decisions.json`（切点 WAL · 记录每章范围 + pending_tail meta）
 - `章节/cluster_<key>_draft/cluster_<key>_pending_tail.txt`（末章不足时）
 
-## 6.2 gen_chapter_titles（normal/mid/high 三档）
-
-```bash
-# 从 splitter_wal 读 chapter_range
-python core/scripts/gen_chapter_titles.py \
-  --project "<项目路径>" \
-  --chapters <START_CH>-<END_CH> \
-  --high-chapters <绝对高潮章号>  # 由 fate_engine/foreshadower 标定
-```
+## 6.2 章标题三段式（emit-brief → novel-titler 亲笔 → apply 确定性验收）
 
 三档策略（70 章爆款调研支撑 · 见 memory `feedback_splitter_post_chapter_title_regen`）：
 - 80% normal（2-4 字）
-- 15% mid（5-8 字）
-- 5% high（8-14 字 史诗钩子）
+- 15% mid（5-8 字 · splitter WAL 末章自动升 mid，pending_tail 存在时不升）
+- 5% high（8-14 字 史诗钩子 · `--high-chapters` 由 fate_engine/foreshadower 标定）
+
+### 6.2a emit-brief（确定性产任务合同）
+
+```bash
+python core/scripts/gen_chapter_titles.py \
+  --project "<项目路径>" \
+  --cluster <key> \
+  --emit-brief \
+  --high-chapters <绝对高潮章号>  # 可选 · 由 fate_engine/foreshadower 标定
+```
+
+从 splitter WAL 读章范围，确定性产 `_数据库/.wal/cluster_<key>_title_brief.json`：逐章条目（章号/档位/blueprint hint/正文路径/fallback_title）+ 历史标题全集（物理章文件头收集·排除本 cluster）+ per-book `title_style` 校准。
+
+- `brief.no_op=true`（splitter 切 0 章·整稿退 pending_tail）→ **跳过 6.2b spawn**，直接跑 6.2c `--apply` 落 no-op receipt。
+
+### 6.2b spawn novel-titler（Claude 亲笔命名）
+
+```
+Agent 启动 novel-titler:
+PLAN_ID: $PLAN_ID
+STEP: 6
+PROJECT: <项目路径>
+CLUSTER_ID: cluster_<key>
+TITLE_BRIEF_PATH: <项目路径>/_数据库/.wal/cluster_<key>_title_brief.json
+OUTPUT_PATH: <项目路径>/_数据库/.wal/cluster_<key>_titles.json
+```
+
+agent 逐章读正文全文后亲笔命名，落盘 titles JSON（合约见 `.claude/agents/novel-titler.md`）。
+
+### 6.2c apply（确定性验收 + 章头重写 + 回填 + receipt）
+
+```bash
+python core/scripts/gen_chapter_titles.py \
+  --project "<项目路径>" \
+  --cluster <key> \
+  --apply
+```
+
+硬验收（脚本确定性执行）：干净度（`_is_clean_title`：无标点/无指令占位词）+ ≤14 字 + 历史严禁重复（精确相等或母题包含）。验收通过的章重写「第NNN章 标题」头 + 回填 cluster_blueprint/进度.json；全部通过落 `_数据库/.wal/cluster_<key>_title_apply_receipt.json`。
+
+退出码：
+- 0 = 全部验收通过（或 no-op），receipt 已落盘
+- 2 = `pending_titles`：titles.json 缺失/契约不符/有章被退回——brief 已更新 rejected 原因（含确定性 fallback_title 兜底候选），**重 spawn novel-titler 重命名（必须与上次不同）后重跑 --apply**，直至 exit 0
+- 3 = fatal（splitter WAL / brief / 进度.json / 章正文缺失等流程契约破损）
 
 ## 6.3 split_cluster_changes 平铺
 
@@ -445,7 +481,7 @@ python core/scripts/split_cluster_changes.py "<项目路径>" --cluster <key>
 - self_eval / waivers 按段所在章号分配
 - 🔴 **不平铺 factual**：writer 已不自报 factual（changes.factual 为空），cluster 级 factual 状态由 `/cluster-save-state` 的 archivist→apply_archive 在 cluster 级确定性回库，**不下放到 per-chapter**
 
-**plan-step 6**（splitter WAL 必须落地）：
+**plan-step 6**（splitter WAL + title_brief + title_apply_receipt 三产物必须落地——receipt 只在 6.2c `--apply` exit 0 后存在）：
 
 ```bash
 python core/scripts/plan_tracker.py step "$PLAN_ID" --n 6

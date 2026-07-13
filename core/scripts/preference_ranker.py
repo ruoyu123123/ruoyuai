@@ -99,7 +99,7 @@ def _keyword_set(text: str) -> frozenset:
 
 def candidate_text(candidate: dict) -> str:
     """候选可供关键词比对的文本面：scope_summary + stakes_delta（两者都是 LLM 自由文本，
-    schema 见 gen_creative.py 的 major_events 契约 + cluster_emergence_engine.me_to_cluster_brief）。"""
+    schema 见 novel-outline-planner 合约的 ME 池段 + cluster_emergence_engine.me_to_cluster_brief）。"""
     if not isinstance(candidate, dict):
         return ""
     parts = [str(candidate.get("scope_summary") or ""), str(candidate.get("stakes_delta") or "")]
@@ -123,7 +123,7 @@ def extract_features(candidate: dict, history_keywords: frozenset = frozenset())
     scope = str(candidate.get("scope_summary") or "")
     feats["scope_length"] = float(len(scope))
 
-    # stakes_delta 是 LLM 自由文本「相对前一小走向的强度增量」（gen_creative.py:403 契约：
+    # stakes_delta 是自由文本「相对前一小走向的强度增量」（novel-outline-planner ME 池契约：
     # "相对前一小走向的强度增量（try-fail 递增）"），不是数值——数值化只能走文本量代理。
     stakes = str(candidate.get("stakes_delta") or "")
     feats["stakes_delta_length"] = float(len(stakes))

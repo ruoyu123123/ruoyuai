@@ -321,9 +321,6 @@ def test_default_no_real_backend_output_unchanged(monkeypatch):
     """无真后端（EMBED_BACKEND 未设/为 hash）→ 逐字节零回归：output 无任何新增语义字段
     （复用 test_homogenization_detected_active 的已验证触发场景）。"""
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    for k in list(os.environ):
-        if k.startswith("GEN_EMBED__"):
-            monkeypatch.delenv(k, raising=False)
     assert rh._has_real_embedding_backend() is False
     monkeypatch.setenv("REVISION_HOMOGENIZATION_MODE", "active")
     proj = _mk_project(profile={
@@ -346,24 +343,18 @@ def test_default_no_real_backend_output_unchanged(monkeypatch):
 
 
 def test_has_real_embedding_backend_env_gate(monkeypatch):
-    """_has_real_embedding_backend 门控：未设/hash → False；非空非 hash / GEN_EMBED__* → True。"""
+    """_has_real_embedding_backend 门控：未设/hash → False；EMBED_BACKEND 非空非 hash → True。"""
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
     assert rh._has_real_embedding_backend() is False
     monkeypatch.setenv("EMBED_BACKEND", "hash")
     assert rh._has_real_embedding_backend() is False
     monkeypatch.setenv("EMBED_BACKEND", "mstyle")
     assert rh._has_real_embedding_backend() is True
-    monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    monkeypatch.setenv("GEN_EMBED__default__API_KEY", "x")
-    assert rh._has_real_embedding_backend() is True
 
 
 def test_semantic_helper_none_without_real_backend(monkeypatch):
     """_semantic_pre_post_distance 无真后端 → None（调用方回退数值路径）。"""
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    for k in list(os.environ):
-        if k.startswith("GEN_EMBED__"):
-            monkeypatch.delenv(k, raising=False)
     assert rh._semantic_pre_post_distance(_SEM_PRE, _SEM_PRE) is None
 
 
@@ -472,9 +463,6 @@ def test_prefetch_called_once_with_pre_and_post_chunks(monkeypatch):
 def test_prefetch_not_called_without_real_backend(monkeypatch):
     """无真后端（默认）→ _semantic_pre_post_distance 提前返回 None·prefetch 完全不触发。"""
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    for k in list(os.environ):
-        if k.startswith("GEN_EMBED__"):
-            monkeypatch.delenv(k, raising=False)
     calls = []
 
     def _rec_prefetch(texts):

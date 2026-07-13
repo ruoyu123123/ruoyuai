@@ -2,27 +2,25 @@
 description: 生成卷级大纲与首个故事块 brief
 ---
 
-## Gen-Model 抽象层
+## 创作分工层（agent 亲笔 + 确定性验收）
 
-**分工**：大纲中**含创意笔触的字段**（卷 arc 描述 / 大事件 description / hook / cliffhanger 等）走 gen-model；**结构性字段**（卷骨架 / cluster 数 / 事件 ID / prerequisites 关系 / 角色 ID）由 Claude 主代理列。
+**分工**：outline 侧全部创意产物（灵感卡 / 卷级大势骨架 / 逐卷 ME 池 / cluster_001 storyboard）由 **`novel-outline-planner`（Claude）亲笔**创作；`gen_creative.py` 等确定性脚本**零 LLM 调用**，只做机器验收、单元调度、合并与落库。
 
-**工作流（Step 2 卷级大纲生成）**：
-1. 主代理（Claude）按原流程列**结构性骨架**（卷数 / 卷标题 / 每卷 cluster 数 / key_milestones 事件 ID 列表 / 角色 anchor）
-2. 含创意笔触的字段（如 `volume_arc` 段落描述、`major_events[].description` 等）由主代理准备**结构 brief JSON**
-3. 调 `gen_creative.py --mode volume_arc`
-4. 主代理把 gen-model 输出合并回大纲结构，写入 `_数据库/进度.json` 的 volumes 段 + `大纲.md` 的卷描述段
+**灵感卡（plan step 3）**：
+1. spawn `novel-outline-planner MODE=brainstorm`（读 `RESEARCH_PATH` 调研缓存 + `STYLE_SKILL_PATH` 风格 skill）→ 亲笔写 `_数据库/.wal/inspiration_cards.json`。
+2. 跑 `gen_creative.py --mode brainstorm --verify --cards ... --count 3 --research ...` 确定性验收：恰 N 卡、必备键齐、logline≤50 字、core_mechanism≤100 字、volume_skeleton 5-6 卷、source_refs≥1 且**每条 URL 必须真实存在于调研缓存原文**（防凭记忆编造来源）。验收不过 exit 2 = 重 spawn 重写；通过则盖验收章并归一为严格 JSON。
 
-**当前实施状态**：
-- `gen_creative.py --mode volume_arc` 已实现，作为卷级创意文字生成入口。
-- **P2 分卷 chunk + WAL 断点续跑（借鉴 AI_NovelGenerator chunked blueprint resume）**：`--mode volume_arc` 内部先产全书骨架（`_数据库/.wal/volume_arc_skeleton.json`·story_destiny/volumes/cluster_001/world_seed），再**逐卷**生成 ME 池（`_数据库/.wal/volume_arc_v<N>.json`·schema 合法的部分产物），全部卷完成后**确定性合并**落 `大势卡.json + 事件簇.json`（与一把梭结构等价）。中断重跑：已存在且校验合法的 WAL 直接跳过（幂等续跑），损坏的重生成；合并时 ME id 跨卷去重校验——重复 id **硬报错不静默覆盖**（撞 id 卷 WAL 隔离为 `.dup_broken` 供重跑重生成）；单卷失败 = 整 step 失败（required 不降级），已完成卷 WAL 保留供续跑。CLI 入口不变（`--volumes N-M` 仅内部调试参数·plan 不用）。
-- **P3 参考语料结构模式抽取（借鉴 Ex3-NovelWriter Extracting 阶段·确定性零 LLM）**：plan step 5 在 volume_arc 之前有一行**条件脚本**（行首 `? `·口径同 cluster-write 的 style_injector）：`? python core/scripts/reference_pattern_extract.py {project_root}`。当项目选定的风格库存在参考原文（`workspace/styles/<风格名>/原文/*.txt`·与蒸馏链同一路径口径）时，用**纯统计/正则**抽取结构模式落 `workspace/styles/<风格名>/genre_storyline_patterns.json`：章均 CJK 分布、对话占比曲线、场景切换密度（分隔线+转场标志词/千字）、冲突节奏（冲突标志词/千字·章序列）、新专名引入速率（人名启发式·只记数量）、卷级前/中/后三段 pacing 形状；`作者风格.json` 已有的量化指纹**复用不重算**（仅拷数值）。🔴 **版权纪律**：artifact 只含数字和短标签 + `source_ids`（章文件名）+ 每维 `provenance`，**绝不包含任何原文句子**。风格库无原文 → 优雅 skip（exit 0·条件产物不进 expected_outputs）；语料签名未变时幂等复用不重算。**消费端**：`gen_creative --mode volume_arc` 的骨架 prompt 在 artifact 存在时注入一段「参考作品结构基线（advisory·可偏离）」数字化参照——**非硬约束**（北极星⑤：大势卡内容仍由模型按灵感卡自由创作，只给结构参照）。
+**卷级大纲（plan step 5·scene_jobs 范式）**：
+1. 跑 `gen_creative.py --mode volume_arc --project ... --selected-card ... --emit-to-db`：逐单元验收 WAL——全书骨架（`_数据库/.wal/volume_arc_skeleton.json`·story_destiny/volumes/cluster_001/world_seed）+ 逐卷 ME 池（`_数据库/.wal/volume_arc_v<N>.json`·schema 合法的部分产物）。
+2. 单元缺失/破损 → 写任务清单 `_数据库/.wal/volume_arc_jobs.json`（unit / 输入材料路径 / 期望产物路径 / 输入 digest / 破损诊断）并 **exit 2=pending**。
+3. 主代理按清单逐单元 spawn `novel-outline-planner MODE=volume_arc_unit`（`UNIT: skeleton | v<N>` + `JOBS_MANIFEST` + `OUTPUT_PATH`）亲笔写单元 JSON。
+4. 重跑同一命令续跑验收（`_normalize_skeleton` / `_normalize_volume_chunk` 是唯一裁决·破损单元退回 pending）；全部单元合法后**确定性合并**落 `大势卡.json + 事件簇.json`（与一把梭结构等价）。合并时 ME id 跨卷去重校验——重复 id **硬报错不静默覆盖**（撞 id 卷 WAL 隔离为 `.dup_broken`·重跑该卷退回 pending 重写）。中断重跑：已存在且校验合法的单元 WAL 直接复用（幂等续跑）。
+- **P3 参考语料结构模式抽取（借鉴 Ex3-NovelWriter Extracting 阶段·确定性零 LLM）**：plan step 5 在 volume_arc 之前有一行**条件脚本**（行首 `? `·口径同 cluster-write 的 style_injector）：`? python core/scripts/reference_pattern_extract.py {project_root}`。当项目选定的风格库存在参考原文（`workspace/styles/<风格名>/原文/*.txt`·与蒸馏链同一路径口径）时，用**纯统计/正则**抽取结构模式落 `workspace/styles/<风格名>/genre_storyline_patterns.json`：章均 CJK 分布、对话占比曲线、场景切换密度（分隔线+转场标志词/千字）、冲突节奏（冲突标志词/千字·章序列）、新专名引入速率（人名启发式·只记数量）、卷级前/中/后三段 pacing 形状；`作者风格.json` 已有的量化指纹**复用不重算**（仅拷数值）。🔴 **版权纪律**：artifact 只含数字和短标签 + `source_ids`（章文件名）+ 每维 `provenance`，**绝不包含任何原文句子**。风格库无原文 → 优雅 skip（exit 0·条件产物不进 expected_outputs）；语料签名未变时幂等复用不重算。**消费端**：`gen_creative --mode volume_arc` 在 artifact 存在时把「参考作品结构基线（advisory·可偏离）」数字化参照写进 `volume_arc_jobs.json` 的 `reference_patterns_block` 供 agent 读——**非硬约束**（北极星⑤：大势卡内容仍由 agent 按灵感卡自由创作，只给结构参照）。
 
-**保持 Claude 处理的部分**：
-- 卷骨架结构（卷数 / 每卷 cluster 数 / event prerequisites 关系）
-- cluster_blueprint 的 anchors / try_fail / info_gain / threads_advance 等结构字段
-- 34 个核心子系统 JSON 初始化（plan_tracker step 3）
-
-**当前 active gen-model**：`python core/scripts/gen_model.py show`。
+**保持确定性脚本处理的部分**：
+- 单元验收 / 任务清单 / 合并去重 / `_metadata` 确定性覆盖 / emit 平铺落库 / world_seed 投影
+- 34 个核心子系统 JSON 初始化（scaffold_subsystems）
+- cluster_blueprint 的结构字段校验（db_schema_validate）
 
 ---
 

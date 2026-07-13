@@ -163,12 +163,26 @@
     {
       "n": 6,
       "name": "splitter+chapter-titles+per-chapter-changes-zero-audit",
-      "description": "v2 cluster 化方案 · 纯格式输出步骤 · 0 质检（章节是输出格式，不是检测单位）· v27 freestyle 默认：调度器先检测上 cluster 的 章节/cluster_<prev>_draft/cluster_<prev>_pending_tail.txt 是否存在，存在则透传 PREVIOUS_PENDING_TAIL_PATH（splitter prepend 到本 cluster 草稿头联合切）· spawn novel-chapter-splitter MODE=ecas_freestyle（按字数硬范围 3000-4500/章自动算 N · 末章<3000 退回 cluster_<key>_pending_tail.txt 不强切 · cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ gen_chapter_titles.py --chapters <range>（normal/mid/high 三档）→ split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json → chapter_end_anchor_scan.py 做章末锚定复扫 · 直接进 step 7 plan-end",
+      "description": "v2 cluster 化方案 · 纯格式输出步骤 · 0 质检（章节是输出格式，不是检测单位）· v27 freestyle 默认：调度器先检测上 cluster 的 章节/cluster_<prev>_draft/cluster_<prev>_pending_tail.txt 是否存在，存在则透传 PREVIOUS_PENDING_TAIL_PATH（splitter prepend 到本 cluster 草稿头联合切）· spawn novel-chapter-splitter MODE=ecas_freestyle（按字数硬范围 3000-4500/章自动算 N · 末章<3000 退回 cluster_<key>_pending_tail.txt 不强切 · cluster_001 默认带倒叙 narrative_mode=in_medias_res）→ 章标题三段式：gen_chapter_titles.py --emit-brief 确定性产 title_brief（splitter WAL 章范围 + normal/mid/high 档位 + blueprint hint + 历史标题全集）→ spawn novel-titler（Claude 亲笔命名）产 cluster_<key>_titles.json → gen_chapter_titles.py --apply 确定性验收（干净度/≤14 字/历史严禁重复·退回章 exit 2=pending_titles 重 spawn 重命名后重跑 --apply）+ 章头重写 + blueprint 回填 + receipt → split_cluster_changes.py 把 cluster_changes.json 平铺到 N 个 第NNN章_changes.json → chapter_end_anchor_scan.py 做章末锚定复扫 · 直接进 step 7 plan-end",
       "required": true,
-      "must_spawn_agent": "novel-chapter-splitter",
+      "must_spawn_agent": [
+        "novel-chapter-splitter",
+        "novel-titler"
+      ],
       "agent_executor": "script",
-      "_doc_pipeline": "splitter 是纯格式层非 judge（agent_executor=script·北极星④）。<cluster_start_ch>/<prev_pending_tail> 用 cluster_lookup 权威算 + pending_tail 物理探测（空值时 --previous-pending-tail 整对自动丢弃）；<chapter_range_dash> 经 data_flow 从 splitter WAL lazy 回填（同 step 内行 1 产 → 行 2 消费·just-in-time 解析）；<rhythm> 从 用户偏好.json 读（缺省 标准）。",
-      "judge_report_path": "_数据库/.wal/splitter_cluster_{key}_decisions.json",
+      "_doc_pipeline": "splitter 是纯格式层非 judge（agent_executor=script·北极星④）。<cluster_start_ch>/<prev_pending_tail> 用 cluster_lookup 权威算 + pending_tail 物理探测（空值时 --previous-pending-tail 整对自动丢弃）；<chapter_range_dash> 经 data_flow 从 splitter WAL lazy 回填（同 step 内行 1 产 → 行 4 消费·just-in-time 解析）；<rhythm> 从 用户偏好.json 读（缺省 标准）。",
+      "_doc_titler": "章标题三段式（agent 亲笔 + 确定性验收）：novel-titler 的 spawn 契约见 .claude/agents/novel-titler.md（PLAN_ID/STEP/PROJECT/CLUSTER_ID/TITLE_BRIEF_PATH/OUTPUT_PATH）。--apply exit 2=pending_titles（titles.json 缺失/契约不符/有章被退回——brief 已更新 rejected 原因，主代理重 spawn novel-titler 重命名后重跑 --apply，直至 exit 0 receipt 落盘）。splitter 切 0 章（整稿退 pending_tail）时 brief.no_op=true：不 spawn novel-titler，直接跑 --apply 落 no-op receipt（expected_outputs 恒满足）。chapter_end_anchor_scan --strict 的 exit 2 是章末 banned_patterns hard_gate（处理流程见命令文档 6.4），与 pending_titles 按产生脚本区分。",
+      "judge_report_path": {
+        "novel-chapter-splitter": "_数据库/.wal/splitter_cluster_{key}_decisions.json",
+        "novel-titler": "_数据库/.wal/cluster_{key}_title_apply_receipt.json"
+      },
+      "control_flow": {
+        "exit_codes": {
+          "0": "ok",
+          "2": "pending_titles",
+          "3": "fail"
+        }
+      },
       "data_flow": {
         "<rhythm>": {
           "source_json": "_数据库/用户偏好.json",
@@ -184,12 +198,16 @@
       },
       "skip_output_allowed": false,
       "expected_outputs": [
-        "_数据库/.wal/splitter_cluster_{key}_decisions.json"
+        "_数据库/.wal/splitter_cluster_{key}_decisions.json",
+        "_数据库/.wal/cluster_{key}_title_brief.json",
+        "_数据库/.wal/cluster_{key}_title_apply_receipt.json"
       ],
       "scripts": [
         "# v27 跨 cluster 补料: <prev_pending_tail> 为空时 --previous-pending-tail 整对被主代理丢弃",
         "python core/scripts/chapter_splitter.py {project_root} --mode ecas_freestyle --cluster-id cluster_{key} --cluster-start-ch <cluster_start_ch> --draft {project_root}/章节/cluster_{key}_draft/cluster_{key}_draft.txt --rhythm <rhythm> --previous-pending-tail <prev_pending_tail>",
-        "python core/scripts/gen_chapter_titles.py --project {project_root} --chapters <chapter_range_dash>",
+        "python core/scripts/gen_chapter_titles.py --project {project_root} --cluster {key} --emit-brief",
+        "# spawn novel-titler 读 title_brief 产 cluster_{key}_titles.json（brief.no_op=true 时跳过 spawn 直接 --apply）",
+        "python core/scripts/gen_chapter_titles.py --project {project_root} --cluster {key} --apply",
         "python core/scripts/split_cluster_changes.py {project_root} --cluster {key}",
         "python core/scripts/chapter_end_anchor_scan.py {project_root} --chapters <chapter_range_dash> --strict"
       ]

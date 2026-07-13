@@ -2,7 +2,7 @@
 # 安装：pip install -r requirements.txt
 
 # Gen-Model 调用层（OpenAI 兼容协议）
-openai>=1.0.0           # gen_writer / gen_fixer / gen_creative / gen_chapter_titles
+openai>=1.0.0           # gen_writer / gen_fixer / distill_replicate（润色/修复链）
 python-dotenv>=1.0.0    # .env 配置加载（GEN__<name>__API_KEY 等）
 
 # Style evaluator（风格保真度量化）

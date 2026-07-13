@@ -389,31 +389,27 @@ def test_main_success_writes_directive_file():
 
 
 # ════════════════════════════════════════════════════════════════════
-# 🔴 2026-07-02 _text_cosine embedding 语义路径接线（真后端命中 + 门控关零回归）
-# 参考范式：topic_drift_scanner._has_real_embedding_backend（本仓约定每文件自留一份）
+# _text_cosine embedding 语义路径（真后端命中 + 门控关零回归）
+# 门控只认 EMBED_BACKEND 非空非 hash（本仓约定每文件自留一份同口径判定）。
 # 沿用本仓既有测试惯例：手工 os.environ 存/复 + 直接换 embedding_store.compute_embedding
 # 属性（不用 pytest monkeypatch fixture · 与 test_topic_drift_scanner / test_agenda_drift_scanner
 # 同款 · 兼容本文件可能被直接 python 执行的旧式 __main__ 场景）。
 # ════════════════════════════════════════════════════════════════════
 def _clear_embed_env():
-    bak_eb = os.environ.pop("EMBED_BACKEND", None)
-    bak_gen = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("GEN_EMBED__")}
-    return bak_eb, bak_gen
+    return os.environ.pop("EMBED_BACKEND", None)
 
 
-def _restore_embed_env(bak_eb, bak_gen):
+def _restore_embed_env(bak_eb):
     if bak_eb is not None:
         os.environ["EMBED_BACKEND"] = bak_eb
-    for k, v in bak_gen.items():
-        os.environ[k] = v
 
 
 def test_has_real_embedding_backend_false_by_default():
-    bak_eb, bak_gen = _clear_embed_env()
+    bak_eb = _clear_embed_env()
     try:
         assert si._has_real_embedding_backend() is False
     finally:
-        _restore_embed_env(bak_eb, bak_gen)
+        _restore_embed_env(bak_eb)
 
 
 def test_has_real_embedding_backend_true_when_set():
@@ -495,10 +491,10 @@ def test_text_cosine_semantic_unavailable_falls_back_to_bigram():
 
 
 def test_text_cosine_gate_off_matches_bigram_exactly():
-    """🔴 零回归锁：门控关（无 EMBED_BACKEND / 无 GEN_EMBED__*）→ _text_cosine 结果与手算
+    """🔴 零回归锁：门控关（无 EMBED_BACKEND）→ _text_cosine 结果与手算
     字符 bigram 余弦逐字节一致，且即便 embedding_store.compute_embedding 被换成任意值
     也绝不会被调用（门控在语义路径最前面短路）。"""
-    bak_eb, bak_gen = _clear_embed_env()
+    bak_eb = _clear_embed_env()
     import embedding_store
     orig = embedding_store.compute_embedding
 
@@ -520,7 +516,7 @@ def test_text_cosine_gate_off_matches_bigram_exactly():
         assert sim_diff < 0.3
     finally:
         embedding_store.compute_embedding = orig
-        _restore_embed_env(bak_eb, bak_gen)
+        _restore_embed_env(bak_eb)
 
 
 def test_mmr_select_passages_semantic_path_no_crash():
@@ -593,9 +589,9 @@ def test_mmr_select_passages_prefetches_candidates_once():
 
 
 def test_mmr_select_passages_gate_off_never_prefetches():
-    """🔴 零回归锁：门控关（无 EMBED_BACKEND / 无 GEN_EMBED__*）→ prefetch_embeddings
+    """🔴 零回归锁：门控关（无 EMBED_BACKEND）→ prefetch_embeddings
     完全不被调用（与既有 _text_cosine 门控关零回归锁互补）。"""
-    bak_eb, bak_gen = _clear_embed_env()
+    bak_eb = _clear_embed_env()
     import embedding_store
     orig_prefetch = embedding_store.prefetch_embeddings
 
@@ -613,4 +609,4 @@ def test_mmr_select_passages_gate_off_never_prefetches():
         assert len(out) == 2
     finally:
         embedding_store.prefetch_embeddings = orig_prefetch
-        _restore_embed_env(bak_eb, bak_gen)
+        _restore_embed_env(bak_eb)

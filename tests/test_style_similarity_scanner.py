@@ -44,7 +44,6 @@ def _force_hash_backend():
     """强制 embedding_store 用默认 hash 后端（md5 ngram·纯本地·确定性）。"""
     es._BACKEND = None
     os.environ.pop("EMBED_BACKEND", None)
-    os.environ.pop("GEN_EMBED_ACTIVE", None)
 
 
 # 5 句风格内聚但 ngram 略有差异的「作者」语料 → 章节自相似 σ>0（能算自适应阈值）
@@ -298,7 +297,6 @@ def _run_cli(args, mode=None):
     返回 CompletedProcess。"""
     env = dict(os.environ)
     env.pop("EMBED_BACKEND", None)
-    env.pop("GEN_EMBED_ACTIVE", None)
     env["PYTHONIOENCODING"] = "utf-8"
     if mode is not None:
         env["L1B_SIMILARITY_MODE"] = mode

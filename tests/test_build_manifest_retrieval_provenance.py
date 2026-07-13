@@ -48,8 +48,6 @@ def _char_freq_embedding(text: str, dim: int = 64) -> list:
 
 def _clear_embed_env(monkeypatch):
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    for k in [k for k in os.environ if k.startswith("GEN_EMBED__")]:
-        monkeypatch.delenv(k, raising=False)
 
 
 def _rm(td):

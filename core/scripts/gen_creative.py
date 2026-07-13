@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
-"""
-gen_creative.py — Gen-Model 创意卡与卷描述生成工具
+"""gen_creative.py — outline 侧创作产物确定性验收器（零 LLM 调用）
 
-「含创意笔触」的输出由当前 active gen-model profile 生成。
-Claude 主代理负责准备 brief（题材/调研缓存/角色骨架），调本工具生成正文段，再接收 JSON 展示给用户。
+创作笔触由 Claude agent 亲笔完成，本脚本只做机器验收与单元调度：
 
-当前公开 CLI mode：
-
-  --mode brainstorm    生成 N 张灵感卡（开书用，配合 /write 命令）                    [✓]
-  --mode volume_arc    生成卷级大纲（分卷 chunk + WAL 断点续跑：骨架→逐卷 ME 池→确定性合并·配合 /outline·阶段2 建书·实现在 gen_creative_volume_arc.py） [✓]
-  --mode distill_reflect  蒸馏 phase-3 修正反思·产 skill markdown（配合 /distill-style） [✓]
+  --mode brainstorm --verify      验收 novel-outline-planner MODE=brainstorm 亲笔写的灵感卡
+                                  （恰 N 卡 / 必备键齐 / logline≤50 字 / core_mechanism≤100 字 /
+                                   volume_skeleton 5-6 卷 / source_refs≥1 且逐条 URL 真实存在于调研缓存）
+  --mode distill_reflect --verify 验收 novel-skill-author MODE=draft 亲笔写的 skill_v{N}.md
+                                  （五必备小节齐 + ≥200 字·配合 /distill-style）
+  --mode volume_arc               卷级大纲单元验收 + 确定性合并落库（实现在 gen_creative_volume_arc.py·
+                                  scene_jobs 范式：单元 WAL 缺失/破损 → 写 _数据库/.wal/volume_arc_jobs.json
+                                  并 exit 2=pending → 主代理 spawn novel-outline-planner
+                                  MODE=volume_arc_unit 亲笔补件 → 重跑续跑验收·配合 /outline）
 
 用法示例：
 
-  # 灵感卡（开书）
-  python core/scripts/gen_creative.py --mode brainstorm \\
-    --topic "末世/沙盒/山海经" --count 3 \\
-    --research <调研缓存 md 路径> \\
-    --style-ref <风格 skill md 路径>
+  # 灵感卡验收（agent 落盘 inspiration_cards.json 后跑）
+  python core/scripts/gen_creative.py --mode brainstorm --verify \\
+    --cards <_数据库/.wal/inspiration_cards.json> --count 3 \\
+    --research <_数据库/.research_cache/inspiration_synthesis.json>
 
-输出：JSON 到 stdout（默认）或 --out <path>。
-
-配置：参见 .env 中 GEN__<name>__* 字段 + GEN_MODEL_ACTIVE。
-管理：python core/scripts/gen_model.py list / switch / show
+exit 语义：0=验收通过 / 1=输入或硬错误 / 2=验收不过或单元 pending（主代理补 agent 产物后重跑）。
 """
 from __future__ import annotations
 import argparse
@@ -33,142 +31,12 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from gen_model_loader import (  # noqa: E402
-    GenModelLoader,
-    GenModelConfigError,
-    GenModelExhaustedError,
-    Profile,
-    reasoning_extra_body,
-)
-
-
-# ============ 依赖 / max_tokens ============
-def check_deps():
-    missing = []
-    try:
-        import openai  # noqa
-    except ImportError:
-        missing.append('openai')
-    try:
-        from dotenv import load_dotenv  # noqa
-    except ImportError:
-        missing.append('python-dotenv')
-    if missing:
-        print(f"[ERROR] 缺少依赖: {missing}", file=sys.stderr)
-        sys.exit(2)
-
-
-def load_model_capabilities_cache() -> dict:
-    try:
-        from frozen_util import user_data_dir as _udd
-        cache_path = _udd() / '.claude' / '.model_capabilities.json'
-    except Exception:
-        cache_path = Path(__file__).parent.parent.parent / '.claude' / '.model_capabilities.json'
-    if not cache_path.exists():
-        return {}
-    try:
-        return json.loads(cache_path.read_text(encoding='utf-8'))
-    except Exception:
-        return {}
-
-
-def resolve_max_tokens(profile: Profile, default: int = 8000) -> tuple[int, str]:
-    """创意卡输出短，默认 8K（writer/fixer 用 16K）"""
-    if profile.max_tokens is not None:
-        return profile.max_tokens, 'profile_explicit'
-    cache = load_model_capabilities_cache()
-    caps = cache.get('model_capabilities', {}).get(profile.model)
-    if caps:
-        return caps.get('recommended_max_tokens_for_writing', default), \
-               f"cache:{caps.get('source','?')}"
-    return default, f'default_fallback_{default}'
-
-
-# ============ 文件读取工具 ============
-def read_text(p: Path | None, limit: int = None) -> str:
-    if p is None or not p.exists():
-        return ""
-    t = p.read_text(encoding='utf-8')
-    if limit and len(t) > limit:
-        t = t[:limit] + f"\n... [truncated at {limit} chars]"
-    return t
-
-
-# ============ MODE: brainstorm（灵感卡）============
-def build_brainstorm_prompt(topic: str, count: int, research: str,
-                            style_ref: str) -> tuple[str, str]:
-    """主代理传：题材 + 调研缓存 + 风格基线 → gen-model 输出 N 张灵感卡正文段"""
-    system = """你是长篇小说的灵感卡生成引擎。
-
-主代理（Claude）已完成调研（联网搜热点 / 竞品 / 设定参考 / 命名规律），把调研缓存和题材方向交给你。
-你的任务：生成 N 张差异化的灵感卡，每张卡都有自己的「钩子 + 卷骨架 + 卖点定位 + 风险点」。
-
-# 灵感卡硬约束
-
-1. **每张卡差异化要明显**（不是同一立意的微调，是真正三种走法）
-2. **logline 50 字内**（一句话点题）
-3. **核心机制 100 字内**（世界观底层 / 力量体系 / 关键设定）
-4. **卷骨架 5-6 卷**（含每卷主角原型 / 时代象征 / 卷高潮事件）
-5. **卖点定位**（贴市场哪条线，引用调研发现）
-6. **风险点**（明确雷区 + 应对）
-7. **必须引用调研 source**（每卡至少一条 URL 来源，从调研缓存中取）
-
-# 输出格式
-
-严格输出 JSON（无 markdown 标签包裹），schema：
-
-{
-  "version": 1,
-  "topic": "...",
-  "cards": [
-    {
-      "card_id": "A",
-      "title": "卡片名（吸引人的短标题）",
-      "logline": "一句话点题（≤50字）",
-      "core_mechanism": "核心机制（≤100字）",
-      "volume_skeleton": [
-        {"vol": 1, "title": "...", "archetype": "...", "climax": "...", "duration_chapters": 80},
-        ...
-      ],
-      "selling_point": "卖点定位（贴市场哪条线）",
-      "risk": "风险点 + 应对",
-      "source_refs": ["http://...", "http://..."]
-    },
-    ...
-  ]
-}
-
-不要写解释、不要加引言、不要写「以下是」。直接输出 JSON。
-"""
-
-    user = f"""# 题材方向
-
-{topic}
-
-# 风格基线（从风格库 skill.md 读，决定 voice/调子 · v22.gov.align.notrunc 全量传）
-
-{style_ref if style_ref else '（未提供风格基线，按通用文学叙事处理）'}
-
-# 调研缓存（必读 synthesis 段；source URLs 用于 card.source_refs · v22.gov.align.notrunc 全量传）
-
-{research if research else '（未提供调研，警告：模型记忆 ≠ 实时热点；尽量保守生成）'}
-
-# 任务
-
-为本题材生成 **{count}** 张差异化灵感卡。三张卡应代表完全不同的三种走法（例如：群像 / 神话 / 反向悬疑 三立意）。
-按上方 JSON schema 输出，不要 markdown 包裹。
-"""
-    return system, user
-
-
-def parse_brainstorm_output(reply: str) -> dict:
-    """解析 brainstorm 输出 JSON"""
-    return _parse_json_loose(reply, fallback={"version": 1, "cards": [], "_raw": reply[:2000]})
+import atomic_json  # noqa: E402
 
 
 # ============ 共享：JSON 解析 ============
 def _parse_json_loose(reply: str, fallback: dict) -> dict:
-    """从返回中找 JSON 块。支持：纯 JSON / ```json ... ``` 包裹 / 末尾 JSON"""
+    """从文本中找 JSON 块。支持：纯 JSON / ```json ... ``` 包裹 / 末尾 JSON"""
     # 1. 尝试 ```json ... ``` 包裹
     m = re.search(r'```json\s*\n(.*?)\n```', reply, re.DOTALL)
     if m:
@@ -194,271 +62,228 @@ def _parse_json_loose(reply: str, fallback: dict) -> dict:
     return fallback
 
 
-# ============ Gen-Model 调用（含 fallback 链） ============
-def call_gen_model(loader: GenModelLoader, system: str, user: str,
-                   default_max_tokens: int = 8000) -> tuple[str, Profile]:
-    """调当前 active profile；失败时按 fallback 链尝试。"""
-    from openai import OpenAI
+# ============ MODE: brainstorm --verify（灵感卡确定性验收）============
+# 与 novel-outline-planner MODE=brainstorm 合约（.claude/agents/novel-outline-planner.md）
+# 一一对应：agent 亲笔写卡，本门把合约承诺升级成机器门。
+BRAINSTORM_REQUIRED_CARD_KEYS = (
+    "card_id", "title", "logline", "core_mechanism",
+    "volume_skeleton", "selling_point", "risk", "source_refs",
+)
+BRAINSTORM_LOGLINE_MAX = 50
+BRAINSTORM_MECHANISM_MAX = 100
+BRAINSTORM_VOLUME_SKELETON_MIN = 5
+BRAINSTORM_VOLUME_SKELETON_MAX = 6
 
-    candidates = loader.get_callable_profiles()
-    failures: list[tuple[str, str]] = []
 
-    for i, profile in enumerate(candidates):
-        max_tokens, mt_source = resolve_max_tokens(profile, default=default_max_tokens)
-        if i == 0:
-            print(f"[gen_creative] 调用 active: {profile.name} ({profile.model})")
-            print(f"[gen_creative] max_tokens={max_tokens} (source: {mt_source})")
+def verify_brainstorm_cards(cards_doc: object, *, count: int,
+                            research_text: str) -> list[str]:
+    """灵感卡结构验收（纯函数·返回违规清单·空=通过）。
+
+    规则：恰 count 卡 / 必备键齐且非空 / card_id 不重复 / logline≤50 字 /
+    core_mechanism≤100 字 / volume_skeleton 5-6 卷（元素为 object）/
+    source_refs≥1 且每条 URL 必须逐字存在于调研缓存原文（防凭记忆编造来源）。
+    """
+    errors: list[str] = []
+    if not isinstance(cards_doc, dict) or cards_doc.get("_parse_failed"):
+        return ["灵感卡文件不是合法 JSON object"]
+    topic = cards_doc.get("topic")
+    if not isinstance(topic, str) or not topic.strip():
+        errors.append("顶层 topic 缺失或为空")
+    cards = cards_doc.get("cards")
+    if not isinstance(cards, list):
+        return errors + ["顶层 cards 缺失或不是 array"]
+    if len(cards) != count:
+        errors.append(f"卡数必须恰 {count} 张，实得 {len(cards)}")
+    seen_ids: set[str] = set()
+    for i, card in enumerate(cards):
+        label = f"cards[{i}]"
+        if not isinstance(card, dict):
+            errors.append(f"{label} 必须是 object")
+            continue
+        missing = [k for k in BRAINSTORM_REQUIRED_CARD_KEYS if k not in card]
+        if missing:
+            errors.append(f"{label} 缺必备键: {missing}")
+        card_id = card.get("card_id")
+        if not isinstance(card_id, str) or not card_id.strip():
+            errors.append(f"{label}.card_id 不能为空")
+        elif card_id in seen_ids:
+            errors.append(f"{label}.card_id 重复: {card_id}")
         else:
-            print(f"\n[FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
-
-        print(f"[gen_creative] prompt: system={len(system)} chars, user={len(user)} chars")
-
-        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url)
-        full_text = ""
-        _xb = reasoning_extra_body(profile)  # reasoning 控制·防 thinking 暴走(elysiver/pie-xian)
-        try:
-            stream = client.chat.completions.create(
-                model=profile.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                max_tokens=max_tokens,
-                temperature=profile.temperature,
-                stream=True,
-                **({"extra_body": _xb} if _xb else {}),
-            )
-            for chunk in stream:
-                if not chunk.choices:
-                    continue
-                delta = chunk.choices[0].delta
-                piece = getattr(delta, 'content', None)
-                if piece:
-                    full_text += piece
-                    sys.stderr.write(piece)
-                    sys.stderr.flush()
-        except Exception as e:
-            reason = str(e)[:200]
-            print(f"\n[FALLBACK] {profile.name} 失败: {reason}", file=sys.stderr)
-            failures.append((profile.name, reason))
-            continue
-
-        print(f"\n[gen_creative] 接收完毕 ({len(full_text)} chars) via {profile.name}")
-        return full_text, profile
-
-    raise GenModelExhaustedError(failures)
+            seen_ids.add(card_id)
+        for key in ("title", "logline", "core_mechanism", "selling_point", "risk"):
+            v = card.get(key)
+            if key in card and (not isinstance(v, str) or not v.strip()):
+                errors.append(f"{label}.{key} 必须是非空字符串")
+        logline = card.get("logline")
+        if isinstance(logline, str) and len(logline.strip()) > BRAINSTORM_LOGLINE_MAX:
+            errors.append(f"{label}.logline 超长: {len(logline.strip())} > {BRAINSTORM_LOGLINE_MAX} 字")
+        mech = card.get("core_mechanism")
+        if isinstance(mech, str) and len(mech.strip()) > BRAINSTORM_MECHANISM_MAX:
+            errors.append(f"{label}.core_mechanism 超长: {len(mech.strip())} > {BRAINSTORM_MECHANISM_MAX} 字")
+        skeleton = card.get("volume_skeleton")
+        if "volume_skeleton" in card:
+            if not isinstance(skeleton, list) or not all(isinstance(v, dict) for v in skeleton):
+                errors.append(f"{label}.volume_skeleton 必须是 object array")
+            elif not (BRAINSTORM_VOLUME_SKELETON_MIN <= len(skeleton)
+                      <= BRAINSTORM_VOLUME_SKELETON_MAX):
+                errors.append(f"{label}.volume_skeleton 必须 "
+                              f"{BRAINSTORM_VOLUME_SKELETON_MIN}-{BRAINSTORM_VOLUME_SKELETON_MAX} 卷，"
+                              f"实得 {len(skeleton)}")
+        refs = card.get("source_refs")
+        if "source_refs" in card:
+            if not isinstance(refs, list) or not refs \
+                    or any(not isinstance(r, str) or not r.strip() for r in refs):
+                errors.append(f"{label}.source_refs 必须是 ≥1 条的非空字符串 array")
+            else:
+                for r in refs:
+                    if r.strip() not in research_text:
+                        errors.append(f"{label}.source_refs URL 不存在于调研缓存"
+                                      f"（禁止凭记忆编造来源）: {r.strip()}")
+    return errors
 
 
-def build_distill_reflect_prompt(*, gap_text: str, current_skill: str,
-                                 author_block: str, version: int) -> tuple[str, str]:
-    """phase-3 修正反思 prompt：读 SFS 差距 → 产 skill v.N 文字约束（markdown）。
-
-    gap_text 空 = **首版 v0 生成**（无 SFS 差距·从作者档 + surface 直接写初版 skill·破
-    chicken-egg：复刻需 skill_v0·SFS 需复刻）。有 gap = 基于差距精化。"""
-    is_v0 = not gap_text.strip()
-    system = (
-        "你是网文作者风格蒸馏专家。任务：产出/精化作者风格 skill（markdown 文字约束），"
-        "让 gen-model 复刻更贴近该作者。\n\n"
-        "🔴 铁律（守北极星⑤·不规训创作）：\n"
-        "1. skill 是给**弱 gen-model** 看的可执行文字约束——越简单越好（skill 越复杂弱模型越乱）。\n"
-        "2. 用**该作者的真实手法**描述（带原文证据），绝不套通用『多用短句』空话。\n"
-        "3. 数值约束给**区间**（如句长均值 28-34），不给死值。\n"
-        + ("4. 这是**首版 skill（v0）**：从作者风格档提炼最显著的笔法签名，全面但精炼。\n"
-           if is_v0 else
-           "4. 这是**精化版**：只针对差距大的维度补/改约束，差距小的别动（别过度约束）。\n")
-        + "\n输出**纯 markdown**（无 JSON、无围栏标记），必须含这些小节标题：\n"
-        "`## 句式与节奏` `## 段落与标点` `## 对话工艺` `## 描写与情绪` `## 反模式（绝不做）`\n"
-        "每节 2-5 条可执行约束。")
-    if is_v0:
-        user = (
-            f"## 作者风格档（第一权威·复刻目标）\n{author_block}\n\n"
-            f"产出**首版 skill v{version}**（markdown·从作者档提炼笔法签名）：")
-    else:
-        user = (
-            f"## 作者风格档（第一权威·复刻目标）\n{author_block}\n\n"
-            f"## 当前 skill（v{version-1}）\n{current_skill or '（无）'}\n\n"
-            f"## SFS 复刻差距报告（哪些维度复刻得不像作者·重点攻这些）\n{gap_text}\n\n"
-            f"产出 skill v{version}（markdown·只攻差距维度·针对性补约束）：")
-    return system, user
-
-
-def _run_distill_reflect(args) -> int:
-    """phase-3 修正反思：产 skill markdown。关 response_format_json·跳 JSON parse·
-    换『非空 + 含必备小节』文本校验（parse_json_loose 对 markdown 必误判 block）。"""
-    import llm_transport as lt
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    # 作者风格档注入统一走共享模块。
-    from author_profile_util import build_author_profile_block, AUTHOR_PROFILE_MISSING_GUARD
-
-    project_root = Path(args.project) if args.project else None
-    if not project_root:
-        print("[ERROR] --mode distill_reflect 需要 --project", file=sys.stderr)
-        return 2
-    # gap-report 可空 = 首版 v0 生成（从作者档·破 chicken-egg：复刻需 skill_v0·SFS 需复刻）
-    gap_text = read_text(Path(args.gap_report) if args.gap_report else None, 12000)
-    current_skill = read_text(Path(args.current_skill) if args.current_skill else None, 20000)
-    author_block = build_author_profile_block(project_root)
-    if not author_block and args.style_ref and Path(args.style_ref).exists():
-        author_block = read_text(Path(args.style_ref), 30000)
-    author_missing = not author_block
-    if author_missing:
-        author_block = AUTHOR_PROFILE_MISSING_GUARD
-
-    version = args.skill_version    # argparse default=1 兜底·`or 1` 会把合法 0(v0) 误当 1
-    system, user = build_distill_reflect_prompt(
-        gap_text=gap_text, current_skill=current_skill,
-        author_block=author_block, version=version)
-    if args.dry_run:
-        print("=== SYSTEM ===\n" + system + "\n\n=== USER ===\n" + user)
-        return 0
-    # markdown 输出·**不**传 response_format_json·**不** parse_json_loose
-    # 🔴 与 volume_arc 同根：单点 gen-model 调用偶发空/缺小节（限速/抖动），直接 block exit 1
-    # 会中断整条蒸馏 plan。加重试≤3 次自愈·真破损才 block
-    # （结构破损是传输/格式问题，不是创作判断，北极星⑤）。
-    MAX_REFLECT_TRIES = 3
-    required_sections = ("## 句式与节奏", "## 段落与标点", "## 对话工艺",
-                         "## 描写与情绪", "## 反模式")
-    md = None
-    last_diag = "(未尝试)"
-    for attempt in range(1, MAX_REFLECT_TRIES + 1):
-        try:
-            result = lt.generate(
-                GenModelLoader(), system, user, max_tokens=12000,
-                cont_msg_builder=lt.default_cont_msg, label=f"distill:reflect#{attempt}")
-        except Exception as e:
-            last_diag = f"gen-model 调用失败: {e}"
-            print(f"[WARN] distill_reflect {last_diag}（第 {attempt}/{MAX_REFLECT_TRIES} 次）")
-            continue
-        cand = (result.text or "").strip()
-        # 文本校验（非 JSON 顶层键）：非空 + 含必备小节（容 2 节缺失·过半缺=结构破损）
-        missing = [s for s in required_sections if s not in cand]
-        if len(cand) >= 200 and len(missing) <= 2:
-            md = cand
-            break
-        last_diag = f"len={len(cand)} 缺小节 {missing}"
-        print(f"[WARN] distill_reflect 输出结构破损·{last_diag}"
-              f"（第 {attempt}/{MAX_REFLECT_TRIES} 次·重试中）", file=sys.stderr)
-    if md is None:
-        print(f"[ERROR] distill_reflect {MAX_REFLECT_TRIES} 次重试后仍 block·{last_diag}")
+def _verify_brainstorm(args) -> int:
+    if not args.cards or not args.research:
+        print("[FATAL] --mode brainstorm --verify 需要 --cards <灵感卡路径> 与 "
+              "--research <调研缓存路径>（source_refs 落地校验）", file=sys.stderr)
         return 1
-    out = Path(args.out) if args.out else (project_root / f"skill_v{version}.md")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(md, encoding="utf-8")
-    print(f"[gen_creative][distill_reflect] skill v{version} → {out}（{len(md)} 字"
-          f"{'·作者档缺失' if author_missing else ''}）", file=sys.stderr)
+    research_path = Path(args.research)
+    if not research_path.exists():
+        print(f"[FATAL] 调研缓存不存在: {research_path}"
+              f"（step2 novel-researcher 必产·重 spawn planner 修不了此项）", file=sys.stderr)
+        return 1
+    cards_path = Path(args.cards)
+    if not cards_path.exists():
+        print(f"[FATAL] 灵感卡未落盘: {cards_path}\n"
+              f"主代理须 spawn novel-outline-planner MODE=brainstorm 亲笔写卡后重跑本验收",
+              file=sys.stderr)
+        return 2
+    research_text = research_path.read_text(encoding="utf-8")
+    doc = _parse_json_loose(cards_path.read_text(encoding="utf-8"),
+                            fallback={"_parse_failed": True})
+    errors = verify_brainstorm_cards(doc, count=args.count, research_text=research_text)
+    if errors:
+        for e in errors:
+            print(f"[FATAL] brainstorm 验收不过: {e}", file=sys.stderr)
+        print(f"[FATAL] 共 {len(errors)} 项违规 → exit 2·主代理重 spawn "
+              f"novel-outline-planner MODE=brainstorm 重写后重跑", file=sys.stderr)
+        return 2
+    # 验收通过 → 盖确定性验收章 + 归一为严格 JSON 落盘（下游 pause 读干净产物）
+    meta = doc.setdefault("_meta", {})
+    if isinstance(meta, dict):
+        meta.update({
+            "mode": "brainstorm",
+            "authored_by": "novel-outline-planner",
+            "verified_by": "gen_creative.brainstorm.verify",
+            "verified_at": datetime.now().isoformat(timespec="seconds"),
+            "research": str(research_path),
+            "card_count": args.count,
+        })
+    atomic_json.atomic_write_json(cards_path, doc)
+    print(f"[OK] brainstorm 验收通过: {args.count} 卡 · 必备键/长度/卷骨架/调研来源全绿 → {cards_path}")
+    return 0
+
+
+# ============ MODE: distill_reflect --verify（skill 小节确定性验收）============
+# 与 novel-skill-author MODE=draft 合约（.claude/agents/novel-skill-author.md）一一对应。
+REQUIRED_SKILL_SECTIONS = ("## 句式与节奏", "## 段落与标点", "## 对话工艺",
+                           "## 描写与情绪", "## 反模式")
+SKILL_MIN_CHARS = 200
+
+
+def verify_distill_skill_text(text: str) -> list[str]:
+    """skill markdown 结构验收（纯函数·返回违规清单·空=通过）：五必备小节齐 + ≥200 字。"""
+    errors: list[str] = []
+    body = (text or "").strip()
+    if len(body) < SKILL_MIN_CHARS:
+        errors.append(f"skill 过短: {len(body)} < {SKILL_MIN_CHARS} 字")
+    missing = [s for s in REQUIRED_SKILL_SECTIONS if s not in body]
+    if missing:
+        errors.append(f"缺必备小节: {missing}")
+    return errors
+
+
+def _verify_distill_skill(args) -> int:
+    if not args.skill:
+        print("[FATAL] --mode distill_reflect --verify 需要 --skill <skill_v{N}.md 路径>",
+              file=sys.stderr)
+        return 1
+    skill_path = Path(args.skill)
+    if not skill_path.exists():
+        print(f"[FATAL] skill 未落盘: {skill_path}\n"
+              f"主代理须 spawn novel-skill-author MODE=draft 亲笔撰写后重跑本验收",
+              file=sys.stderr)
+        return 2
+    errors = verify_distill_skill_text(skill_path.read_text(encoding="utf-8"))
+    if errors:
+        for e in errors:
+            print(f"[FATAL] distill_reflect 验收不过: {e}", file=sys.stderr)
+        print("[FATAL] exit 2·主代理重 spawn novel-skill-author MODE=draft 重写后重跑",
+              file=sys.stderr)
+        return 2
+    print(f"[OK] distill_reflect 验收通过: 五必备小节齐 + ≥{SKILL_MIN_CHARS} 字 → {skill_path}")
     return 0
 
 
 # ============ 主入口 ============
 def main():
-    # stdout/stderr UTF-8（Windows 默认 GBK·prompt/AUTHOR_PROFILE_MISSING_GUARD 含 ⚠/emoji
-    # 直打 GBK 终端会 UnicodeEncodeError·与 frozen dispatch 同款·dev 直跑也防）
+    # stdout/stderr UTF-8（Windows 默认 GBK·中文诊断直打 GBK 终端会 UnicodeEncodeError）
     for _s in (sys.stdout, sys.stderr):
         if hasattr(_s, "reconfigure"):
             try:
                 _s.reconfigure(encoding="utf-8", errors="replace")
             except Exception:
                 pass
-    check_deps()
     parser = argparse.ArgumentParser(
-        description='Gen-Model 创意卡与卷描述生成工具'
+        description='outline 侧创作产物确定性验收器（创作由 Claude agent 亲笔·本脚本零 LLM）'
     )
     parser.add_argument('--mode', required=True,
                         choices=['brainstorm', 'volume_arc', 'distill_reflect'])
-    parser.add_argument('--project', help='项目根路径（volume_arc 需要）')
-    parser.add_argument('--out', help='输出 JSON 文件路径（默认 stdout）')
-    parser.add_argument('--dry-run', action='store_true', help='只输出 prompt 不调 API')
+    parser.add_argument('--verify', action='store_true',
+                        help='[brainstorm/distill_reflect] 确定性验收 agent 亲笔产物（两模式必传）')
 
-    # brainstorm 参数
-    parser.add_argument('--topic', help='[brainstorm] 题材方向')
-    parser.add_argument('--count', type=int, default=3, help='生成卡数（默认 3）')
-    parser.add_argument('--research', help='[brainstorm] 调研缓存 md 路径')
-    parser.add_argument('--style-ref', help='[brainstorm] 风格基线 skill.md 路径')
+    # brainstorm --verify 参数
+    parser.add_argument('--cards', help='[brainstorm] 待验收灵感卡 JSON 路径')
+    parser.add_argument('--count', type=int, default=3, help='[brainstorm] 期望卡数（默认 3）')
+    parser.add_argument('--research', help='[brainstorm] 调研缓存路径（source_refs 落地校验）；'
+                                           '[volume_arc] 调研背景路径（写入 jobs 清单）')
 
-    # volume_arc 卷级大纲生成（阶段2 创建书籍）
+    # distill_reflect --verify 参数
+    parser.add_argument('--skill', help='[distill_reflect] 待验收 skill_v{N}.md 路径')
+
+    # volume_arc 参数（单元验收 + 合并落库·实现在 gen_creative_volume_arc.py）
+    parser.add_argument('--project', help='[volume_arc] 项目根路径')
     parser.add_argument('--selected-card', help='[volume_arc] 选中灵感卡 JSON 路径')
     parser.add_argument('--cluster-count', type=int, help='[volume_arc] 每卷故事块数（软提示）')
     parser.add_argument('--framework', help='[volume_arc] 叙事框架')
     parser.add_argument('--rhythm', help='[volume_arc] 节奏档')
+    parser.add_argument('--style-ref', help='[volume_arc] 风格 skill md 路径（写入 jobs 清单）')
     parser.add_argument('--emit-to-db', action='store_true',
                         help='[volume_arc] 拆产出落 大势卡.json + 事件簇.json')
-    parser.add_argument('--volumes',
-                        help='[volume_arc] 内部调试：只生成指定卷 chunk（"N" 或 "N-M"）·'
-                             '不触发合并（plan 不用此参数·全量生成才合并落库）')
-    # distill_reflect 参数（阶段3 phase-3 修正反思·产 skill markdown）
-    parser.add_argument('--gap-report', help='[distill_reflect] style_evaluator SFS 差距报告 JSON')
-    parser.add_argument('--current-skill', help='[distill_reflect] 当前 skill_vN.md 路径（可空=首版）')
-    parser.add_argument('--skill-version', type=int, default=1,
-                        help='[distill_reflect] 产出 skill 版本号')
 
     args = parser.parse_args()
 
-    # 组装 prompt
     if args.mode == 'brainstorm':
-        if not args.topic:
-            print("[ERROR] --mode brainstorm 需要 --topic", file=sys.stderr)
-            sys.exit(2)
-        research_text = read_text(Path(args.research) if args.research else None, 30000)
-        style_text = read_text(Path(args.style_ref) if args.style_ref else None, 10000)
-        system, user = build_brainstorm_prompt(args.topic, args.count,
-                                               research_text, style_text)
-        parser_fn = parse_brainstorm_output
+        if not args.verify:
+            print("[FATAL] 灵感卡由 novel-outline-planner MODE=brainstorm 亲笔写作；"
+                  "--mode brainstorm 只支持 --verify 确定性验收", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(_verify_brainstorm(args))
 
-    elif args.mode == 'volume_arc':
-        # 卷级大纲生成（阶段2 创建书籍·走 llm_transport·四硬契约·自带 emit/dry-run）
-        # 实现在 gen_creative_volume_arc.py（P2 分卷 chunk 三阶段）
-        from gen_creative_volume_arc import _run_volume_arc
-        sys.exit(_run_volume_arc(args))
+    if args.mode == 'distill_reflect':
+        if not args.verify:
+            print("[FATAL] skill 由 novel-skill-author MODE=draft 亲笔撰写；"
+                  "--mode distill_reflect 只支持 --verify 确定性验收", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(_verify_distill_skill(args))
 
-    elif args.mode == 'distill_reflect':
-        # 蒸馏 phase-3 修正反思（阶段3·产 skill markdown 非 JSON）
-        sys.exit(_run_distill_reflect(args))
-
-    if args.dry_run:
-        print("=== SYSTEM ===")
-        print(system)
-        print("\n=== USER ===")
-        print(user)
-        print(f"\n[dry-run] system={len(system)} chars / user={len(user)} chars")
-        try:
-            loader = GenModelLoader()
-            p = loader.get_active_profile()
-            print(f"[dry-run] active profile: {p.name} ({p.model} @ {p.base_url})")
-        except GenModelConfigError as e:
-            print(f"[dry-run] [WARN] active profile 未就绪: {e}", file=sys.stderr)
-        return
-
-    # 加载 gen-model
-    try:
-        loader = GenModelLoader()
-        active = loader.get_active_profile()
-    except GenModelConfigError as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
-        sys.exit(2)
-
-    print(f"[gen_creative] active = {active.name}", file=sys.stderr)
-
-    try:
-        reply, used_profile = call_gen_model(loader, system, user)
-    except GenModelExhaustedError as e:
-        print(f"\n[ERROR] {e}", file=sys.stderr)
-        sys.exit(3)
-
-    result = parser_fn(reply)
-    result.setdefault('_meta', {})
-    result['_meta'].update({
-        'mode': args.mode,
-        'generated_by_profile': used_profile.name,
-        'generated_by_model': used_profile.model,
-        'generated_at': datetime.now().isoformat(),
-    })
-
-    output_json = json.dumps(result, ensure_ascii=False, indent=2)
-    if args.out:
-        Path(args.out).write_text(output_json, encoding='utf-8')
-        print(f"\n[gen_creative] 写出: {args.out}", file=sys.stderr)
-    else:
-        print(output_json)
+    # volume_arc：单元验收 + jobs pending + 确定性合并落库
+    if args.verify:
+        print("[FATAL] --mode volume_arc 自带单元验收（jobs pending 范式），不接受 --verify",
+              file=sys.stderr)
+        sys.exit(1)
+    from gen_creative_volume_arc import _run_volume_arc
+    sys.exit(_run_volume_arc(args))
 
 
 if __name__ == '__main__':

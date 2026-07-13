@@ -74,9 +74,14 @@ workspace/styles/{书名}/                         # 风格项目根
 │
 ├── _skillopt/train/{run_id}/                  # SkillOpt 可恢复训练状态
 │   ├── claude_scene_jobs.json                 # 候选 digest × run × cluster required 任务
-│   └── claude_scene_jobs/{job_run}/{digest}/{cluster_id}/claude_scenes/
-│       ├── scene_*.txt                        # 每个候选独占的 Claude 场景稿
-│       └── agent_report.json                  # novel-replica-writer 回执
+│   ├── claude_scene_jobs/{job_run}/{digest}/{cluster_id}/claude_scenes/
+│   │   ├── scene_*.txt                        # 每个候选独占的 Claude 场景稿
+│   │   └── agent_report.json                  # novel-replica-writer 回执
+│   ├── optimizer_patch_jobs.json              # skill digest × ep/step patch 提案 required 任务
+│   └── optimizer_patch_jobs/{ep_step}/{digest}/
+│       ├── trajectory_batch.json              # 轨迹素材（含 PROTECTED/REJECT_BUFFER 上下文）
+│       ├── skill_snapshot.md                  # 提案对象 skill 快照
+│       └── patches.json                       # novel-skill-author (MODE=patch) 亲笔提案
 │
 ├── 对比报告/                                   # 闭环阶段 3 产物
 │   ├── eval_v{X}_cluster_{key}.json           # SFS 量化报告
@@ -233,7 +238,7 @@ core/claude-home/
 
 ```
 core/scripts/                                   # 运行时确定性代码
-├── gen_*.py / distill_*.py                     # 生成模型调用、润色与蒸馏
+├── gen_*.py / distill_*.py                     # 润色/蒸馏与 agent 亲笔产物确定性验收（gen_creative 零 LLM）
 ├── cluster_*.py / save_state*.py               # cluster 编排、涌现与状态回库
 ├── *_scanner.py / cross_cluster_*.py            # cluster 与跨 cluster 顾问扫描
 ├── plan_*.py / adaptive_runner.py               # plan、门禁、恢复与自学习运行时
@@ -411,8 +416,8 @@ tests/                                           # pytest 回归测试，按 tes
 |---|---|---|
 | `/distill-style` | 风格基线 / skill / 衔接分析 / 复刻测试 / 对比报告 / distillation_log | `workspace/styles/{书名}/` |
 | `/distill-character` | 角色 voice DNA | `workspace/styles/{书名}/角色档案/{角色名}.json` |
-| `/outline` | 大纲 / 34 个数据库 JSON | `workspace/novels/{书名}/_数据库/` |
-| `/cluster-write` | cluster 整块草稿 + 切章物理文件 + 平铺 CHANGES | `workspace/novels/{书名}/章节/cluster_<key>_draft/cluster_<key>_draft.txt` → splitter 切出 `第{N}章/第{N}章.txt` + `第{N}章_changes.json` |
+| `/outline` | 大纲 / 34 个数据库 JSON；灵感卡与卷级大纲单元由 `novel-outline-planner` 亲笔（MODE=brainstorm → `.wal/inspiration_cards.json`；MODE=volume_arc_unit → `.wal/volume_arc_skeleton.json` + `.wal/volume_arc_v<N>.json`），`gen_creative.py` 确定性验收（缺件/破损 → `.wal/volume_arc_jobs.json` + exit 2=pending）并合并 emit `大势卡.json` + `事件簇.json` | `workspace/novels/{书名}/_数据库/` |
+| `/cluster-write` | cluster 整块草稿 + 切章物理文件 + 章标题 + 平铺 CHANGES；章标题由 `gen_chapter_titles.py --emit-brief`（确定性产 `.wal/cluster_<key>_title_brief.json`）→ `novel-titler` 亲笔（→ `.wal/cluster_<key>_titles.json`）→ `--apply` 确定性验收（干净度/≤14 字/历史查重·退回章 exit 2=pending_titles·全过落 `.wal/cluster_<key>_title_apply_receipt.json` 并回填 blueprint） | `workspace/novels/{书名}/章节/cluster_<key>_draft/cluster_<key>_draft.txt` → splitter 切出 `第{N}章/第{N}章.txt` + `第{N}章_changes.json` |
 | `/cluster-save-state` | cluster 摘要 / 反思 / 走向卡 + 下块 brief；实体归档由 `novel-archivist`→`archive.json`→`apply_archive` 回库，运行态由 `novel-state-tracker`→`cluster_state_delta.json` + 独立回执→`cluster_state_delta.py` 回库 | `workspace/novels/{书名}/_数据库/故事块摘要.json` + `_数据库/.wal/cluster_<key>_*` |
 | `/export` | 拼接全文（`export_book.py` 硬校验通过后写出） | `workspace/novels/{书名}/exports/<书名>_全文_<章数>章.txt` |
 

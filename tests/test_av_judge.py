@@ -1,24 +1,20 @@
-"""av_judge.py 测试 — AV-judge 解耦特质·作者验证配对判别（北极星①⑤⑥ · 2026-05-31）。
+"""av_judge.py 测试 — AV-judge 解耦特质·作者验证配对判别（北极星①⑤⑥）。
 
-根因（本批任务说明 · 实证）：治「SFS 数值过了但读着不像」——SFS 是统计指纹（句长/虚词分布对齐
+根因（实证）：治「SFS 数值过了但读着不像」——SFS 是统计指纹（句长/虚词分布对齐
 ≠ 读者感知同作者），黑箱 LLM-judge 给整体分不解释哪维露馅。AV-judge 站中间：读者视角 + 解耦
 4 维（词汇选择/句法/话语连接词/语用语气）+ 配对判别（A 作者锚 / B 仿写验，指证 B 哪维走味）。
 
-必 shadow 上线（Catch Me If You GAN / Are We There Yet 实证：LLM-judge 对网文隐性风格会失准，
-创意写作域约 1/4 难例翻转）：env AV_JUDGE_MODE 默认 off（零回归），shadow 只记录、active 仍 advisory。
-绝不 hard_gate（AV_TRAIT_DRIFT 不进 audit_hub.HARD_GATE_CODES）。
+判别由 novel-av-judge agent 亲笔完成（distill_av_verify 两段式渲染任务/验收聚合），
+av_judge 本体是纯确定性库。绝不 hard_gate（AV_TRAIT_DRIFT 不进 audit_hub.HARD_GATE_CODES）。
 
-纪律：只测**确定性的 prompt 构造 / rubric / 配对结构 / mode 解析 / 解析报告**，
-  不实跑 gen-model（需 API · gen-model 调用复用 gen_model_loader 同款 fallback 管线）。
+纪律：只测**确定性的 prompt 构造 / rubric / 配对结构 / 解析报告**（模块零模型调用）。
   真作者原文（蛊真人/惊悚乐园·「蛊」非「蛛」）当样本验证 prompt 正常构建（北极星纪律 3 金标准）。
 
-测试覆盖：[A] mode 解析（默认 off / shadow / active / 非法回退）；[B] 4 维 rubric（全列 + 读者视角
-  + 配对问法）；[C] 配对结构（A 锚在 B 前 + 锚定方向 + 不比内容）；[D] 输出 JSON 契约（4 维 verdict）；
-  [E] 解析 verdict → advisory（走味/命中/宽容缺维/非走味保守）；[F] 报告分级（shadow 只记录 /
-  active 上报 / 永远 advisory 不 hard_gate）；[G] 真作者原文金标准。
+测试覆盖：[B] 4 维 rubric（全列 + 读者视角 + 配对问法）；[C] 配对结构（A 锚在 B 前 + 锚定方向 +
+  不比内容）；[D] 输出 JSON 契约（4 维 verdict）；[E] 解析 verdict → advisory（走味/命中/宽容缺维/
+  非走味保守）；[F] 报告分级（shadow 只记录 / active 上报 / 永远 advisory 不 hard_gate）；
+  [G] 真作者原文金标准。
 """
-import importlib
-import os
 import sys
 from pathlib import Path
 
@@ -27,63 +23,11 @@ sys.path.insert(0, str(_ROOT / "core" / "scripts"))
 import av_judge as av  # noqa: E402
 
 
-def _reload_av(mode):
-    """以指定 AV_JUDGE_MODE reload av_judge（env 在函数内读 · reload 求稳）。"""
-    if mode is None:
-        os.environ.pop("AV_JUDGE_MODE", None)
-    else:
-        os.environ["AV_JUDGE_MODE"] = mode
-    importlib.reload(av)
-    return av
-
-
 _AUTHOR = "他停下脚步。\n风很大。\n远处的灯一盏盏灭了，像有人在数着退场。\n他没回头。\n" * 8
 _REPLICA = "她缓缓地停下了脚步，心中涌起一丝难以言喻的复杂情绪。\n然而，风很大。\n" * 8
 
 # 4 维名（与 av.AV_TRAIT_DIMS 单一来源对齐）
 _DIM_NAMES = ["词汇选择", "句法", "话语连接词", "语用语气"]
-
-
-# ════════════════════════════════════════════════════════════════
-# [A] mode 解析 _av_judge_mode
-# ════════════════════════════════════════════════════════════════
-
-def test_A_mode_default_active():
-    """AV_JUDGE_MODE 未设 → 默认 active（2026-05-31 放量 · 走味维度作 advisory 上报 ·
-    LLM-judge 失准故必 advisory + 报告标注人工复核 · code 绝不进 HARD_GATE_CODES）。"""
-    ax = _reload_av(None)
-    try:
-        assert ax._av_judge_mode() == "active"
-    finally:
-        _reload_av(None)
-
-
-def test_A_mode_shadow_and_active():
-    """shadow / active / off 各自识别（大小写不敏感）。"""
-    for v in ("shadow", "SHADOW", "Shadow"):
-        try:
-            assert _reload_av(v)._av_judge_mode() == "shadow", v
-        finally:
-            _reload_av(None)
-    for v in ("active", "ACTIVE"):
-        try:
-            assert _reload_av(v)._av_judge_mode() == "active", v
-        finally:
-            _reload_av(None)
-    for v in ("off", "OFF"):
-        try:
-            assert _reload_av(v)._av_judge_mode() == "off", v
-        finally:
-            _reload_av(None)
-
-
-def test_A_mode_garbage_falls_back_active():
-    """空 / 非法值回退 active（放量默认）· 只有显式 off 才关掉（离线/无 gen-model 逃生口）。"""
-    for v in ("", "on", "1", "true", "garbage"):
-        try:
-            assert _reload_av(v)._av_judge_mode() == "active", v
-        finally:
-            _reload_av(None)
 
 
 # ════════════════════════════════════════════════════════════════

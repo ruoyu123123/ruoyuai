@@ -8,9 +8,10 @@ held-out validation 严格优于才升级,bounded edit 控破坏,reject buffer �
 - dataset        : train/select/test 集划分 (cluster_index → 60/20/20)
 - rollout        : 驱动 distill_replicate 跑 batch 收 trajectory + reward
 - reward         : 多信号聚合成 binary reward (audit/voice/truth/SFS)
-- reject_buffer  : 失败编辑持久化 + prepend 反哺 optimizer prompt
+- reject_buffer  : 失败编辑持久化 + prepend 反哺提案任务上下文
 - validation_gate: 严格 `>` 判定 + 平局拒绝
-- optimizer      : 独立 LLM prompt → 输出 ≤4 条 add/delete/replace patch
+- optimizer      : patch 提案任务素材组装 + novel-skill-author 提案验收 (≤L_t 截断)
+- optimizer_jobs : patch 提案任务合同 (manifest 登记/required 拦停/批次回执)
 - patch_applier  : difflib 兜底 apply patch 到 skill.md
 - skill_compactor: 把现有臃肿 skill_FINAL.md 切 SLOW/FAST/REFERENCE 三段
 - train          : 主循环 epoch=4 rollout=40 minibatch=8 Lt=4→2

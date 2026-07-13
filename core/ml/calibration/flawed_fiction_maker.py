@@ -31,20 +31,16 @@
   injection{paragraph_index, char_offset, injected_text} / expected_layer /
   expected_deterministic_detect / expect{...匹配锚} / base_draft_sha256 / notes
 
-【确定性】默认 template 模式纯确定性：同输入草稿两次运行逐字节一致（无随机源）。
-LLM 增广模式（--mode llm）env 门控 RUOYU_RUN_REAL_API=1（真 API 测试纪律），
-未开门控直接响亮失败 exit 2——绝不静默降级回模板。
+【确定性】纯确定性模板注入：同输入草稿两次运行逐字节一致（无随机源·零 LLM）。
 
 用法：
-  py core/ml/calibration/flawed_fiction_maker.py --out-dir <dir>
-     [--draft <path>] [--mode template|llm]
+  py core/ml/calibration/flawed_fiction_maker.py --out-dir <dir> [--draft <path>]
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -54,7 +50,6 @@ _DEFAULT_DRAFT = (_REPO / "workspace" / "novels" / "主神验尸官" / "章节"
 
 PROTAGONIST = "秦烬"
 PARA_SEP = "\n\n"
-REAL_API_ENV = "RUOYU_RUN_REAL_API"
 
 # ───────────────────── 手造 locked_facts fixture（与原草稿相容·baseline 零冲突）─────────────────────
 # key → fact 文本。数值类只用「岁」（_DEFAULT_INVARIANT_UNITS 保底单位·原草稿无「岁」字）。
@@ -302,40 +297,7 @@ def inject(base_text: str, spec: dict) -> tuple[str, int]:
     return PARA_SEP.join(new_paras), char_offset
 
 
-def _llm_augment(spec: dict) -> dict:
-    """LLM 增广：真 gen-model 改写注入段（保留人名+矛盾语义·提高表面多样性）。
-    env 门控 RUOYU_RUN_REAL_API=1；门控未开 → 响亮失败（绝不静默降回模板）。"""
-    if os.environ.get(REAL_API_ENV) != "1":
-        raise SystemExit(f"[FATAL] --mode llm 需要 {REAL_API_ENV}=1（真 API 测试纪律）；"
-                         f"离线校准请用默认 --mode template")
-    scripts = _REPO / "core" / "scripts"
-    if str(scripts) not in sys.path:
-        sys.path.insert(0, str(scripts))
-    import llm_transport  # noqa: E402
-    from gen_model_loader import get_default_loader  # noqa: E402
-    loader = get_default_loader()
-    new_paras = []
-    for para in spec["injected_paragraphs"]:
-        fact = FACTS.get(spec["fact_key"] or "", "（无锁定事实·保持时间/空间矛盾语义）")
-        result = llm_transport.generate(
-            loader,
-            system=("你是小说反事实注入器。把给定句子改写成风格不同但**语义等价**的一段中文小说文字："
-                    "必须保留句中出现的所有人名原样，必须保留它与下列锁定事实的矛盾关系，"
-                    "不得添加解释性文字，只输出改写后的段落本身。"),
-            user=f"锁定事实：{fact}\n待改写句子：{para}",
-            max_tokens=512, label="flawed_fiction_llm")
-        text = (result.text or "").strip()
-        if PROTAGONIST in para and PROTAGONIST not in text:
-            raise SystemExit(f"[FATAL] LLM 改写丢失人名 {PROTAGONIST}（sample={spec['sample_id']}）"
-                             f"——ground_truth 无法锚定，中止")
-        new_paras.append(text)
-    out = dict(spec)
-    out["injected_paragraphs"] = new_paras
-    out["augmented_by_llm"] = True
-    return out
-
-
-def build_samples(base_draft: Path, out_dir: Path, mode: str = "template") -> dict:
+def build_samples(base_draft: Path, out_dir: Path) -> dict:
     """产出 baseline + 全部注入样本。返回 manifest dict（同时落盘 manifest.json）。"""
     base_text = base_draft.read_text(encoding="utf-8")
     base_sha = _sha256(base_text)
@@ -345,7 +307,6 @@ def build_samples(base_draft: Path, out_dir: Path, mode: str = "template") -> di
     manifest = {"schema": "flawed_fiction_manifest_v1",
                 "base_draft": str(base_draft),
                 "base_draft_sha256": base_sha,
-                "mode": mode,
                 "protagonist": PROTAGONIST,
                 "facts": dict(FACTS),
                 "samples": []}
@@ -365,8 +326,7 @@ def build_samples(base_draft: Path, out_dir: Path, mode: str = "template") -> di
     manifest["samples"].append({"sample_id": BASELINE_ID, "flaw_type": "baseline",
                                 "dir": str(b_dir)})
 
-    specs = FLAW_SPECS if mode == "template" else [_llm_augment(s) for s in FLAW_SPECS]
-    for spec in specs:
+    for spec in FLAW_SPECS:
         s_dir = samples_root / spec["sample_id"]
         draft_dir = s_dir / "章节" / "cluster_001_draft"
         draft_dir.mkdir(parents=True, exist_ok=True)
@@ -391,8 +351,6 @@ def build_samples(base_draft: Path, out_dir: Path, mode: str = "template") -> di
             "base_draft_sha256": base_sha,
             "notes": spec["notes"],
         }
-        if spec.get("augmented_by_llm"):
-            gt["augmented_by_llm"] = True
         _dump(s_dir / "ground_truth.json", gt)
         manifest["samples"].append({"sample_id": spec["sample_id"],
                                     "flaw_type": spec["flaw_type"], "dir": str(s_dir)})
@@ -405,17 +363,14 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="FlawedFictions 受控反事实注入器（S5 反向校准）")
     ap.add_argument("--draft", default=str(_DEFAULT_DRAFT), help="真 cluster 草稿路径")
     ap.add_argument("--out-dir", required=True, help="样本输出目录（勿指向仓库内）")
-    ap.add_argument("--mode", choices=["template", "llm"], default="template",
-                    help="template=离线确定性模板（默认）；llm=真 gen-model 增广"
-                         f"（需 {REAL_API_ENV}=1）")
     args = ap.parse_args(argv)
     draft = Path(args.draft)
     if not draft.exists():
         print(f"[FATAL] 草稿不存在: {draft}", file=sys.stderr)
         return 2
-    manifest = build_samples(draft, Path(args.out_dir), mode=args.mode)
+    manifest = build_samples(draft, Path(args.out_dir))
     print(f"[flawed_fiction_maker] {len(manifest['samples'])} 个样本 → {args.out_dir}"
-          f"（mode={manifest['mode']}·base_sha={manifest['base_draft_sha256'][:12]}）")
+          f"（base_sha={manifest['base_draft_sha256'][:12]}）")
     return 0
 
 

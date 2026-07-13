@@ -11,7 +11,7 @@
   5. fixture 项目：目标 fact 排第一 / 事件簇 linear / 地图词典
   6. e2e 确定性回归锁：numeric 样本过 locked_fact scanner 必中；temporal/spatial
      样本过对应 scanner 必中；baseline 全层 0 violation
-  7. LLM 模式门控：RUOYU_RUN_REAL_API 未开 → SystemExit（绝不静默降回模板）
+  7. 纯模板锁：maker 无任何 LLM 增广路径（_llm_augment / mode 参数不复活）
   8. runner 判中函数 + 召回矩阵聚合
 """
 from __future__ import annotations
@@ -50,7 +50,7 @@ def _make_base_draft(tmp_path: Path) -> Path:
 def built(tmp_path):
     base = _make_base_draft(tmp_path)
     out = tmp_path / "out"
-    manifest = maker.build_samples(base, out, mode="template")
+    manifest = maker.build_samples(base, out)
     return base, out, manifest
 
 
@@ -67,8 +67,8 @@ def _sample_dir(out: Path, sid: str) -> Path:
 def test_deterministic_same_input_same_output(tmp_path):
     base = _make_base_draft(tmp_path)
     out_a, out_b = tmp_path / "a", tmp_path / "b"
-    man_a = maker.build_samples(base, out_a, mode="template")
-    man_b = maker.build_samples(base, out_b, mode="template")
+    man_a = maker.build_samples(base, out_a)
+    man_b = maker.build_samples(base, out_b)
     assert [s["sample_id"] for s in man_a["samples"]] == \
            [s["sample_id"] for s in man_b["samples"]]
     for entry in man_a["samples"]:
@@ -195,13 +195,14 @@ def test_baseline_zero_violations_all_layers(built, monkeypatch):
     assert sp.scan(draft, project_root=b, cluster_mode=True)["violations"] == []
 
 
-# ════════════════════════ 7. LLM 模式门控 ════════════════════════
+# ════════════════════════ 7. 纯模板锁（LLM 增广路径不复活） ════════════════════════
 
-def test_llm_mode_requires_real_api_env(tmp_path, monkeypatch):
-    monkeypatch.delenv(maker.REAL_API_ENV, raising=False)
-    base = _make_base_draft(tmp_path)
-    with pytest.raises(SystemExit):
-        maker.build_samples(base, tmp_path / "llm_out", mode="llm")
+def test_llm_augment_path_removed():
+    """maker 是纯确定性模板注入器——LLM 增广符号与 mode 参数不存在（防复活锁）。"""
+    import inspect
+    assert not hasattr(maker, "_llm_augment")
+    assert not hasattr(maker, "REAL_API_ENV")
+    assert "mode" not in inspect.signature(maker.build_samples).parameters
 
 
 # ════════════════════════ 8. runner 判中 + 矩阵聚合 ════════════════════════

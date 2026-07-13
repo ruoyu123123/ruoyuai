@@ -338,8 +338,6 @@ def test_load_scorer_default_gate_off_stays_placeholder(monkeypatch):
     """零回归证明：无真后端（默认环境）→ _load_scorer(None) 逐字节保持原行为
     （_placeholder_sfs_score, True）。"""
     monkeypatch.delenv("EMBED_BACKEND", raising=False)
-    for k in [k for k in os.environ if k.startswith("GEN_EMBED__")]:
-        monkeypatch.delenv(k, raising=False)
     fn, is_placeholder = mod._load_scorer(None)
     assert fn is mod._placeholder_sfs_score
     assert is_placeholder is True

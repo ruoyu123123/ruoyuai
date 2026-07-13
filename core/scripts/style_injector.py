@@ -118,18 +118,12 @@ def _char_bigrams(text: str) -> dict:
 
 # ── 真语义 embedding 可选路径 ───────
 def _has_real_embedding_backend() -> bool:
-    """EMBED_BACKEND 未设（默认 hash 袋·无真语义）→ False。只有配了真后端才返回 True。
-
-    与 topic_drift_scanner._has_real_embedding_backend 同口径（本仓约定：每个消费
-    embedding 的文件自带一份，不互相 import）。也检查 .env 的 GEN_EMBED__* API 配置。
+    """EMBED_BACKEND 非空且非 hash（本地 daemon/ruoyu_style/mstyle/local 链）→ True；
+    未设或 =hash（默认 hash 袋·无真语义）→ False。本仓约定：每个消费风格 embedding
+    的文件自带一份同口径判定，不互相 import。
     """
     eb = os.environ.get("EMBED_BACKEND", "").strip().lower()
-    if eb and eb != "hash":
-        return True
-    for k in os.environ:
-        if k.startswith("GEN_EMBED__"):
-            return True
-    return False
+    return bool(eb) and eb != "hash"
 
 
 def _semantic_text_cosine(a: str, b: str) -> "float | None":

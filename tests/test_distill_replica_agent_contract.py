@@ -46,8 +46,12 @@ def test_all_distill_creation_steps_use_single_replica_writer():
                         (character, (3,))):
         for n in steps:
             step = next(item for item in plan["steps"] if item["n"] == n)
-            assert step["must_spawn_agent"] == "novel-replica-writer"
-            assert step["judge_report_path"] in step["expected_outputs"]
+            must = step["must_spawn_agent"]
+            agents = [must] if isinstance(must, str) else must
+            assert "novel-replica-writer" in agents
+            jrp = step["judge_report_path"]
+            declared = jrp if isinstance(jrp, str) else jrp["novel-replica-writer"]
+            assert declared in step["expected_outputs"]
 
 
 def test_only_one_replica_writer_definition_exists():

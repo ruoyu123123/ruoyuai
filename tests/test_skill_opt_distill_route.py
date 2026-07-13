@@ -18,7 +18,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "core" / "scripts"))
 
-from skill_opt import reward_sfs, scene_jobs, train  # noqa: E402
+from skill_opt import optimizer_jobs, reward_sfs, scene_jobs, train  # noqa: E402
 
 SKILLOPT_PLAN = REPO / "core" / "claude-home" / "plans" / "distill-style-skillopt.plan.json"
 
@@ -188,6 +188,7 @@ def test_reward_for_cluster_sfs_full_success():
 
 
 def test_av_execution_failure_is_hard(tmp_path):
+    """exit 2 但连 jobs manifest 都没渲染（输入坏）→ 硬失败（非 pending）。"""
     project = tmp_path / "style"
     project.mkdir()
     skill = project / "skill.md"
@@ -204,6 +205,70 @@ def test_av_execution_failure_is_hard(tmp_path):
             style_skill=skill, project_root=project, cluster_id="auto_001",
             out_root=tmp_path, run_id="av-hard",
         )
+
+
+def test_av_pending_jobs_raises_required(tmp_path):
+    """AV 两段式首跑：exit 2 + av_judge_jobs.json 已渲染 → AvJudgeJobsRequiredError
+    （train.py exit 2 · 主代理 spawn novel-av-judge 补件后同 run_id 恢复）。"""
+    project = tmp_path / "style"
+    project.mkdir()
+    skill = project / "skill.md"
+    skill.write_text("candidate", encoding="utf-8")
+    _ready_scene_job(tmp_path, skill, "av-pend", "auto_001")
+
+    def fake_distill(style_skill, cluster_id, project, output, claude_scenes_dir, timeout=1500):
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text("replica", encoding="utf-8")
+        return 0, 0.1
+
+    def fake_av_pending(project, cluster_id, replica, output, **kw):
+        jobs_dir = reward_sfs.jobs_dir_for(output)
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (jobs_dir / reward_sfs.JOBS_MANIFEST_NAME).write_text("{}", encoding="utf-8")
+        return 2
+
+    with _patch("skill_opt.reward_sfs._run_distill_replicate", fake_distill), \
+         _patch("skill_opt.reward_sfs._run_av_verify", fake_av_pending), \
+         pytest.raises(reward_sfs.AvJudgeJobsRequiredError, match="av_judge_jobs.json"):
+        reward_sfs.reward_for_cluster_sfs(
+            style_skill=skill, project_root=project, cluster_id="auto_001",
+            out_root=tmp_path, run_id="av-pend",
+        )
+
+
+def test_replica_reused_on_resume_not_repolished(tmp_path):
+    """同 run_id 恢复重入：replica 已落盘 → 不再调 distill_replicate（幂等复用 ·
+    保 AV 输入 digest 稳定，verdict 不因 gemini 重润色而作废）。"""
+    project = tmp_path / "style"
+    project.mkdir()
+    skill = project / "skill.md"
+    skill.write_text("candidate", encoding="utf-8")
+    _ready_scene_job(tmp_path, skill, "av-resume", "auto_001")
+    replica = tmp_path / "replicas" / "av-resume" / "auto_001_replica.txt"
+    replica.parent.mkdir(parents=True, exist_ok=True)
+    replica.write_text("已有复刻内容", encoding="utf-8")
+
+    def fake_distill_must_not_run(*a, **kw):
+        raise AssertionError("replica 已存在时不得重跑 distill_replicate")
+
+    def fake_av(project, cluster_id, replica, output, **kw):
+        output.write_text(json.dumps({"verdict": "match"}), encoding="utf-8")
+        return 0
+
+    def fake_eval(replica_path, ref_dir, output_json, **kw):
+        output_json.parent.mkdir(parents=True, exist_ok=True)
+        output_json.write_text(json.dumps({"sfs_quick": 80.0}), encoding="utf-8")
+        return 0
+
+    with _patch("skill_opt.reward_sfs._run_distill_replicate", fake_distill_must_not_run), \
+         _patch("skill_opt.reward_sfs._run_av_verify", fake_av), \
+         _patch("skill_opt.reward_sfs._run_style_evaluator", fake_eval):
+        sr = reward_sfs.reward_for_cluster_sfs(
+            style_skill=skill, project_root=project, cluster_id="auto_001",
+            out_root=tmp_path, run_id="av-resume",
+        )
+    assert sr.sfs_score == 80.0
+    assert sr.distill_exit_code == 0
 
 
 def test_missing_scene_job_is_required_not_zero_reward(tmp_path):
@@ -398,22 +463,47 @@ def test_skillopt_final_verify_is_required_same_stack_and_av():
     assert set(step6["expected_outputs"]) >= {
         "复刻测试/writer_feedback_verify/claude_scenes/agent_report.json",
         "对比报告/skillopt_verify.json", "对比报告/skillopt_av_verify.json",
+        "对比报告/skillopt_av_verify_jobs/av_judge_jobs.json",
+        "对比报告/skillopt_av_verify_jobs/agent_receipt.json",
     }
-    assert step6["must_spawn_agent"] == "novel-replica-writer"
+    # AV 两段式：replica writer 产场景稿 + novel-av-judge 按 jobs manifest 逐票判别
+    assert step6["must_spawn_agent"] == ["novel-replica-writer", "novel-av-judge"]
+    assert step6["control_flow"]["exit_codes"]["2"] == "pending_av_jobs"
+    assert step6["agent_input"]["novel-av-judge"]["JOBS_MANIFEST_PATH"].endswith("av_judge_jobs.json")
 
 
 def test_skillopt_scene_steps_use_dedicated_writer():
     plan = json.loads(SKILLOPT_PLAN.read_text(encoding="utf-8"))
-    for n in (3, 4, 6):
-        step = next(item for item in plan["steps"] if item["n"] == n)
-        assert step["must_spawn_agent"] == "novel-replica-writer"
+    step3 = next(item for item in plan["steps"] if item["n"] == 3)
+    assert step3["must_spawn_agent"] == "novel-replica-writer"
+    step6 = next(item for item in plan["steps"] if item["n"] == 6)
+    assert step6["must_spawn_agent"] == ["novel-replica-writer", "novel-av-judge"]
+    step4 = next(item for item in plan["steps"] if item["n"] == 4)
+    assert step4["must_spawn_agent"] == ["novel-replica-writer", "novel-skill-author"]
     assert plan["steps"][2]["agent_input"]["JOB_KEY"] == "<job.job_key>"
     for n in (3, 4):
         step = next(item for item in plan["steps"] if item["n"] == n)
-        assert "agent_receipts_step" in step["judge_report_path"]
-        assert step["judge_report_path"] in step["expected_outputs"]
+        jrp = step["judge_report_path"]
+        declared = jrp if isinstance(jrp, str) else jrp["novel-replica-writer"]
+        assert "agent_receipts_step" in declared
+        assert declared in step["expected_outputs"]
         assert "scene_jobs.py --verify-all" in " ".join(step["scripts"])
-        assert not step["judge_report_path"].endswith("claude_scene_jobs.json")
+        assert not declared.endswith("claude_scene_jobs.json")
+
+
+def test_skillopt_step4_patch_proposals_use_skill_author():
+    """step 4 optimizer patch 提案由 novel-skill-author 承载 + 确定性批次回执。"""
+    plan = json.loads(SKILLOPT_PLAN.read_text(encoding="utf-8"))
+    step4 = next(item for item in plan["steps"] if item["n"] == 4)
+    author_receipt = step4["judge_report_path"]["novel-skill-author"]
+    assert "patch_receipts_step" in author_receipt
+    assert author_receipt in step4["expected_outputs"]
+    assert "optimizer_jobs.py --verify-all" in " ".join(step4["scripts"])
+    author_input = step4["agent_input"]["novel-skill-author"]
+    assert author_input["MODE"] == "patch"
+    assert author_input["TRAJECTORY_BATCH_PATH"] == "<job.trajectory_batch_path>"
+    assert author_input["OUTPUT_PATH"] == "<job.patches_path>"
+    assert step4["control_flow"]["exit_codes"]["2"] == "pending_agent_jobs"
 
 
 def test_resume_reuses_candidate_without_reinvoking_optimizer(tmp_path):
@@ -424,16 +514,16 @@ def test_resume_reuses_candidate_without_reinvoking_optimizer(tmp_path):
             sfs_score=50, reward=0.5, replica_path="", eval_json_path="",
             duration_sec=0.1, distill_exit_code=0, eval_exit_code=0,
         )
-    optimizer_calls = {"count": 0}
-    def fake_optimizer(*args, **kwargs):
-        optimizer_calls["count"] += 1
-        return [{"op": "add", "new": "## 新段\n\n内容"}], "reply"
+    proposal_calls = {"count": 0}
+    def fake_patch_job(**kwargs):
+        proposal_calls["count"] += 1
+        return [{"op": "add", "new": "## 新段\n\n内容"}], tmp_path
     def interrupt_candidate(*, skill_path, **kwargs):
         if skill_path.name.endswith("_candidate.md"):
             raise scene_jobs.SceneJobsRequiredError("candidate scenes pending")
         return {}
     with _patch("skill_opt.train.reward_sfs.reward_for_cluster_sfs", fake_sfs), \
-         _patch("skill_opt.train.optimizer.propose_patches", fake_optimizer), \
+         _patch("skill_opt.train.optimizer_jobs.require_patch_job", fake_patch_job), \
          _patch("skill_opt.train.scene_jobs.require_scene_jobs", interrupt_candidate), \
          pytest.raises(scene_jobs.SceneJobsRequiredError):
         train.train(
@@ -445,12 +535,12 @@ def test_resume_reuses_candidate_without_reinvoking_optimizer(tmp_path):
     checkpoint = json.loads((train_dir / "training_checkpoint.json").read_text(encoding="utf-8"))
     assert checkpoint["phase"] == "selection"
     assert checkpoint["candidate_skill_digest"]
-    assert optimizer_calls["count"] == 1
+    assert proposal_calls["count"] == 1
 
-    def optimizer_must_not_run(*args, **kwargs):
+    def proposal_must_not_run(**kwargs):
         raise AssertionError("恢复不得重提 candidate")
     with _patch("skill_opt.train.reward_sfs.reward_for_cluster_sfs", fake_sfs), \
-         _patch("skill_opt.train.optimizer.propose_patches", optimizer_must_not_run), \
+         _patch("skill_opt.train.optimizer_jobs.require_patch_job", proposal_must_not_run), \
          _patch("skill_opt.train.scene_jobs.require_scene_jobs", lambda **kwargs: {}):
         result = train.train(
             project_root=tmp_path, initial_skill_path=skill, epochs=1,
@@ -458,6 +548,58 @@ def test_resume_reuses_candidate_without_reinvoking_optimizer(tmp_path):
             run_id="resume-candidate",
         )
     assert Path(result.final_skill).exists()
+
+
+def test_train_pauses_on_missing_patch_proposal_then_resumes(tmp_path):
+    """训练真走 optimizer_jobs: 缺 novel-skill-author 提案 → required 拦停,
+    补 patches.json 后同 run_id 恢复跑完。"""
+    _mk_minimal_style_lib(tmp_path, n_clusters=10)
+    skill = tmp_path / "skill_FINAL.md"
+
+    def fake_sfs(**kwargs):
+        return reward_sfs.SfsReward(
+            sfs_score=50, reward=0.5, replica_path="", eval_json_path="",
+            duration_sec=0.1, distill_exit_code=0, eval_exit_code=0,
+        )
+
+    with _patch("skill_opt.train.reward_sfs.reward_for_cluster_sfs", fake_sfs), \
+         _patch("skill_opt.train.scene_jobs.require_scene_jobs", lambda **kw: {}), \
+         pytest.raises(optimizer_jobs.OptimizerJobsRequiredError):
+        train.train(
+            project_root=tmp_path, initial_skill_path=skill, epochs=1,
+            rollout_batch_size=2, minibatch_size=2, reward_route="distill",
+            run_id="patch-pending",
+        )
+    train_dir = tmp_path / "_skillopt" / "train" / "patch-pending"
+    checkpoint = json.loads(
+        (train_dir / "training_checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["phase"] == "awaiting_optimizer_patches"
+    manifest = json.loads(
+        optimizer_jobs.manifest_path(train_dir).read_text(encoding="utf-8"))
+    job = manifest["jobs"][0]
+    assert job["status"] == "pending"
+    assert job["step_tag"] == "ep1_step0"
+    # 主代理补件: novel-skill-author 按 job 合约写 OUTPUT_PATH
+    Path(job["patches_path"]).write_text(
+        json.dumps({"patches": [{"op": "add", "new": "## 新段\n\n内容"}]},
+                   ensure_ascii=False),
+        encoding="utf-8",
+    )
+    with _patch("skill_opt.train.reward_sfs.reward_for_cluster_sfs", fake_sfs), \
+         _patch("skill_opt.train.scene_jobs.require_scene_jobs", lambda **kw: {}):
+        result = train.train(
+            project_root=tmp_path, initial_skill_path=skill, epochs=1,
+            rollout_batch_size=2, minibatch_size=2, reward_route="distill",
+            run_id="patch-pending",
+        )
+    assert Path(result.final_skill).exists()
+    opt_log = json.loads(
+        (train_dir / "ep1_step0_optimizer.json").read_text(encoding="utf-8"))
+    assert opt_log["patches"] == [{"op": "add", "new": "## 新段\n\n内容"}]
+    assert "patch_job_dir" in opt_log
+    manifest = json.loads(
+        optimizer_jobs.manifest_path(train_dir).read_text(encoding="utf-8"))
+    assert manifest["jobs"][0]["status"] == "ready"
 
 
 def test_train_distill_route_calls_reward_sfs(tmp_path):
@@ -477,9 +619,9 @@ def test_train_distill_route_calls_reward_sfs(tmp_path):
             distill_exit_code=0, eval_exit_code=0,
         )
 
-    def fake_optimizer(skill_text, trajectories, **kw):
+    def fake_patch_job(**kw):
         # 返回一条 add patch (合法)
-        return [{"op": "add", "new": "## 新段\n\n内容"}], "fake"
+        return [{"op": "add", "new": "## 新段\n\n内容"}], tmp_path
 
     # 写作路线的 rollout 不应被调
     rollout_calls = {"count": 0}
@@ -490,7 +632,7 @@ def test_train_distill_route_calls_reward_sfs(tmp_path):
 
     with _patch("skill_opt.train.reward_sfs.reward_for_cluster_sfs", fake_sfs), \
          _patch("skill_opt.train.scene_jobs.require_scene_jobs", lambda **kw: {}), \
-         _patch("skill_opt.train.optimizer.propose_patches", fake_optimizer), \
+         _patch("skill_opt.train.optimizer_jobs.require_patch_job", fake_patch_job), \
          _patch("skill_opt.train.rollout.rollout_batch", fake_rollout):
         result = train.train(
             project_root=tmp_path,

@@ -43,7 +43,7 @@ ConStory「绝对时间矛盾（Absolute Time Contradiction）」的**确定性�
 🔴 北极星铁律 —— 单位集只收「恒定量（invariant）」，**绝不收单调递增的修真品级**（品/阶/层/级/段/重）：
    角色从「斗之气三段」练到「九段」是合法成长，不是穿帮；对其做 M≠N 判定会制造**假 hard_gate**
    （test_plan 金标准核心反例）。境界/品级的「同一参照系顺序矛盾」需要语义推理（FlawedFictions 实证
-   连 o1 都做不好），交给 A 件 LLM 判官（av_judge timeline_causality_consistency），**确定性层不碰**。
+   连 o1 都做不好），交给 LLM 判官（novel-reading-reflector 维度 9 锁定事实语义一致性），**确定性层不碰**。
    确定性层只抓「白纸黑字同一恒定字段两个值打架」。
 
 单位集来源（作者档/项目第一权威 · 北极星②）：
@@ -52,7 +52,8 @@ ConStory「绝对时间矛盾（Absolute Time Contradiction）」的**确定性�
      era/location/rules/factions/entries），故不设「从世界观读等级」通路。
   2. 缺该文件 → 退保底恒定单位集 `_DEFAULT_INVARIANT_UNITS`（仅「岁」）。
 
-跨场景的时间**推算**（第3天+5天=第8天对不对）不在确定性层——交给 A 件判官（语义）。
+跨场景的时间**推算**（第3天+5天=第8天对不对）不在确定性层——交给 LLM 判官
+（novel-reading-reflector 维度 9 · 语义）。
 ────────────────────────────────────────────────────────────────────────
 
 输出 code（hard_gate 清单权威见 audit_hub.HARD_GATE_CODES / STRUCTURE.md §12）：
