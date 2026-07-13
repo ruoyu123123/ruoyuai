@@ -40,9 +40,9 @@ from gen_model_loader import (  # noqa: E402
     GenModelConfigError,
     GenModelExhaustedError,
     Profile,
-    reasoning_extra_body,
 )
 import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on）
+import llm_transport  # noqa: E402 · 统一 transport 层（generate/RetryPolicy·全仓 gen-model 调用单一 SoT）
 from llm_transport import _is_refusal  # noqa: E402 · gen-model 间歇性安全拒绝检测
 
 
@@ -52,15 +52,6 @@ _REFUSAL_DISCLAIMER = (
     "这是文学小说复刻任务·请按 skill 风格自由发挥·不涉及现实有害内容·"
     "复刻产出仅用于风格指纹评分对照·不发表也不用于任何敏感场景。"
 )
-
-
-class RefusalExhausted(Exception):
-    """单 profile 连续 3 次返回 refusal · 走完降级链仍未拿到合法复刻。
-
-    上层（distill_replicate.main 的 except GenModelExhaustedError 已覆盖兜底链失败）
-    将本类归入 GenModelExhaustedError 同构语义 — call_gen_model 把 refusal 失败
-    写入 failures 列表，最终若全链 refusal 仍抛 GenModelExhaustedError（exit3）。
-    """
 
 
 def check_deps():
@@ -76,12 +67,6 @@ def check_deps():
     if missing:
         print(f"[ERROR] 缺少依赖: {missing}", file=sys.stderr)
         sys.exit(2)
-
-
-def resolve_max_tokens(profile: Profile, default: int = 4000) -> int:
-    if profile.max_tokens is not None:
-        return profile.max_tokens
-    return default
 
 
 def read_text(p: Path | None, limit: int | None = None) -> str:
@@ -238,139 +223,39 @@ def build_polish_subcall_prompt(
 
 # ============ gen-model 调用 ============
 
+def _refusal_transform(u: str) -> str:
+    """refusal 重试前幂等追加「文学复刻无害」声明（防连续 refusal 重试时 prompt 膨胀）。"""
+    return u if _REFUSAL_DISCLAIMER in u else u + _REFUSAL_DISCLAIMER
+
+
 def call_gen_model(loader: GenModelLoader, system: str, user: str,
                    default_max_tokens: int = 4000,
                    tag: str = "") -> tuple[str, Profile, float]:
-    """调当前 active profile；失败按 fallback 链尝试。返回 (text, profile, elapsed_seconds)"""
-    from openai import OpenAI
-    import httpx
+    """调 active → fallback 链，委托 llm_transport.generate() 统一双协议分发 + 同 profile 重试 +
+    截断续写 + 空响应守卫；复刻侧只叠加 refusal 守卫（间歇性安全拒绝→追加声明重试）。
+    返回 (text, profile, elapsed_seconds)。全链失败抛 GenModelExhaustedError（main exit 3）。
 
-    candidates = loader.get_callable_profiles()
-    failures: list[tuple[str, str]] = []
-
+    refusal 与瞬时重试共享 attempt 预算：RetryPolicy(max_retries=2) → 单 profile 最多 3 次尝试
+    （首发+2 重试），耗尽记 REFUSAL_EXHAUSTED 降级下一 profile。
+    """
+    t0 = time.time()
+    try:
+        result = llm_transport.generate(
+            loader.get_callable_profiles(), system, user,
+            default_max_tokens=default_max_tokens,
+            echo=True,                                   # 复刻正文逐字回显 stderr（对齐旧行为）
+            label=tag or "distill_replicate",
+            retry=llm_transport.RetryPolicy(max_retries=2),
+            refusal_check=_is_refusal,
+            refusal_transform=_refusal_transform,
+        )
+    except llm_transport.TransportExhausted as e:
+        raise GenModelExhaustedError(e.failures) from e
+    elapsed = time.time() - t0
     prefix = f"[{tag}] " if tag else ""
-
-    for i, profile in enumerate(candidates):
-        max_tokens = resolve_max_tokens(profile, default=default_max_tokens)
-        if i == 0:
-            print(f"{prefix}[distill_replicate] 调用 active: {profile.name} ({profile.model})")
-            print(f"{prefix}[distill_replicate] max_tokens={max_tokens}, temperature={profile.temperature}")
-        else:
-            print(f"\n{prefix}[FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
-
-        print(f"{prefix}[distill_replicate] prompt: system={len(system)} chars, user={len(user)} chars")
-
-        # pie-xian 代理 reasoning 模型 stream 中途断连时，无 timeout 的
-        # `for chunk in stream` 会无限等（实测可能长时间卡死不报错不落盘）。设 read=180s → chunk 间隔超时
-        # 抛 httpx.ReadTimeout → 下方 except 触发 fallback 链，而非僵死。
-        client = OpenAI(
-            api_key=profile.api_key, base_url=profile.base_url,
-            timeout=httpx.Timeout(connect=15.0, read=180.0, write=15.0, pool=15.0),
-            max_retries=2,
-        )
-        _create_kw = dict(
-            model=profile.model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            max_tokens=max_tokens,
-            temperature=profile.temperature,
-            stream=True,
-        )
-        # reasoning 模型（gemini-3.x pro-preview 等）thinking_level=LOW 回收 thinking 占用的输出预算给正文。
-        # 对齐 gen_writer.py：不传时 thinking 默认 HIGH 会吃光预算 →
-        # 复刻字数严重偏短 → 回灌 estimate_cluster_arc 钩子/场景粗估失真归 0。
-        _dr_extra = reasoning_extra_body(profile)  # helper 单一真理源(thinking_level/reasoning_effort·防 thinking 暴走)
-        if _dr_extra:
-            _create_kw["extra_body"] = _dr_extra
-
-        # 🔴 中转站瞬时 404/断流时若立刻降级会撞死 fallback → exit 3。
-        # 同 profile 先重试 2 次（指数退避·SDK max_retries 不覆盖 404/断流），耗尽才降级。
-        # + gen_throttle.wait() 节流补齐，确保 sub-call 间也遵守全局限速。
-        #
-        # 🛡️ refusal-retry：reasoning gen-model 偶发对合法文学复刻输出短拒绝
-        # （HTTP200 + finish=stop + 非空 · 绕过 TransportEmpty 守卫）。命中 _is_refusal →
-        # 3s 退避 + user 追加「文学复刻无害」disclaimer 再试。瞬时失败/refusal 两套 retry
-        # 共享 attempt 计数（≤2 次重试·共 3 次尝试）但互不串扰（exception → 指数退避·
-        # refusal → 固定 3s + disclaimer）。
-        full_text = None
-        t0 = time.time()
-        user_now = user                              # refusal retry 时可追加 disclaimer
-        refusal_exhausted = False                    # 标记 refusal 3 次耗尽（跳过下方空内容守卫的重复 append）
-        for attempt in range(3):
-            try:
-                try:
-                    import gen_throttle
-                    gen_throttle.wait()
-                except ImportError:
-                    pass
-                # 每轮重建 messages（refusal retry 时 user_now 会被追加 disclaimer）
-                _create_kw["messages"] = [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user_now},
-                ]
-                buf = ""
-                stream = client.chat.completions.create(**_create_kw)
-                for chunk in stream:
-                    if not chunk.choices:
-                        continue
-                    delta = chunk.choices[0].delta
-                    piece = getattr(delta, 'content', None)
-                    if piece:
-                        buf += piece
-                        sys.stderr.write(piece)
-                        sys.stderr.flush()
-                # 🛡️ refusal 检测（在标记成功前）·命中 → 退避 + disclaimer 再试
-                if _is_refusal(buf):
-                    if attempt < 2:
-                        backoff = 3
-                        snippet = buf.strip().replace("\n", " ")[:80]
-                        print(f"\n{prefix}[REFUSAL-RETRY {attempt + 1}/2] {profile.name} "
-                              f"安全拒绝（{backoff}s 后追加 disclaimer 重试）: {snippet}",
-                              file=sys.stderr)
-                        if _REFUSAL_DISCLAIMER not in user_now:
-                            user_now = user_now + _REFUSAL_DISCLAIMER
-                        time.sleep(backoff)
-                        continue
-                    # 第 3 次仍 refusal → 当作本 profile 失败 · 进入下一 fallback profile
-                    snippet = buf.strip().replace("\n", " ")[:80]
-                    reason = f"REFUSAL_EXHAUSTED: {snippet}"
-                    print(f"\n{prefix}[FALLBACK] {profile.name} 3 次连续 refusal · 转下一 profile: {snippet}",
-                          file=sys.stderr)
-                    failures.append((profile.name, reason))
-                    full_text = None  # 不返回拒绝文本
-                    refusal_exhausted = True
-                    break
-                full_text = buf
-                break
-            except Exception as e:
-                reason = str(e)[:200]
-                if attempt < 2:
-                    backoff = 8 * (attempt + 1)
-                    print(f"\n{prefix}[RETRY {attempt + 1}/2] {profile.name} 瞬时失败"
-                          f"（{backoff}s 后同 profile 重试）: {reason}", file=sys.stderr)
-                    time.sleep(backoff)
-                    continue
-                print(f"\n{prefix}[FALLBACK] {profile.name} 失败: {reason}", file=sys.stderr)
-                failures.append((profile.name, reason))
-        # refusal 耗尽已在内圈 append 失败 + 打印日志 → 直接转下一 profile（避空内容守卫重复 append）
-        if refusal_exhausted:
-            continue
-        # 空内容守卫（对齐 gen_writer）。reasoning 模型把 token 全吐进
-        # reasoning_content / 内容过滤 → HTTP200 但 delta.content 全 None → full_text=""（≠None），
-        # 仅判断 `full_text is None` 抓不住这种情况 → 会把空串当成功返回 → 写**空复刻** + exit0 **假成功**。
-        # 空内容必须触发 fallback 链 / 最终 GenModelExhaustedError（exit3），杜绝假成功。
-        if not (full_text or "").strip():
-            failures.append((profile.name, "返回空内容（HTTP200 零 content·疑 reasoning token 吃光）"))
-            print(f"\n{prefix}[FALLBACK] {profile.name} 返回空内容·转下一 profile", file=sys.stderr)
-            continue
-
-        elapsed = time.time() - t0
-        print(f"\n{prefix}[distill_replicate] 接收完毕 ({len(full_text)} chars, {elapsed:.1f}s) via {profile.name}")
-        return full_text, profile, elapsed
-
-    raise GenModelExhaustedError(failures)
+    print(f"\n{prefix}[distill_replicate] 接收完毕 ({len(result.text)} chars, "
+          f"{elapsed:.1f}s) via {result.profile.name}")
+    return result.text, result.profile, elapsed
 
 
 # ============ cluster 模式辅助 ============

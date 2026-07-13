@@ -65,13 +65,15 @@ def test_throttle_invalid_env_falls_to_off():
 
 def test_request_points_wired():
     """gen-model 实际请求点都调了 gen_throttle.wait()。gen_writer/gen_fixer/distill_replicate
-    的 call_gen_model 都委托 llm_transport.generate()/stream_once() 发起请求，节流单一真理源
-    收敛在 llm_transport.py 的 2 处协议路径（openai + gemini）；distill_replicate 的自定义
-    refusal-retry 循环额外直接接了 1 处。"""
+    的 call_gen_model 全部委托 llm_transport.generate() 发起请求，节流单一真理源收敛在
+    llm_transport.py 的 2 处协议路径（openai + gemini），三个上层脚本不再各自接节流
+    （distill_replicate 的私有 transport 已收编·refusal 守卫改由 generate() 的 refusal_check hook 承载）。"""
     lt = (_ROOT / "core" / "scripts" / "llm_transport.py").read_text(encoding="utf-8")
     dr = (_ROOT / "core" / "scripts" / "distill_replicate.py").read_text(encoding="utf-8")
     assert lt.count("gen_throttle.wait()") >= 2, "llm_transport 未在 2 处协议路径接节流"
-    assert dr.count("gen_throttle.wait()") >= 1, "distill_replicate 自定义重试循环未接节流"
+    # distill_replicate 已委托 llm_transport·不应再有私有 transport/自建节流
+    assert "gen_throttle.wait()" not in dr, "distill_replicate 不应再自建节流（已收编 llm_transport 单一 SoT）"
+    assert "chat.completions.create" not in dr, "distill_replicate 不应再有私有 openai 流式调用（已委托 generate）"
 
 
 if __name__ == "__main__":

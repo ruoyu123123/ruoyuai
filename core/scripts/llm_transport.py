@@ -566,6 +566,8 @@ def generate(loader_or_profiles, system: str, user: str, *,
              retry: RetryPolicy | None = None,
              echo: bool = False,
              label: str = "llm",
+             refusal_check=None,
+             refusal_transform=None,
              _stream_fn=None) -> GenResult:
     """active → fallback 链逐个尝试；同 profile 限流/超时指数退避重试（尊重 Retry-After）；
     finish_reason=='length' 自动续写 ≤ retry.max_cont_rounds 轮；空响应换 profile。
@@ -573,6 +575,12 @@ def generate(loader_or_profiles, system: str, user: str, *,
     loader_or_profiles：GenModelLoader 或 list[Profile]（测试注入友好）。
     cont_msg_builder(reason:str, round:int)->str：业务自定义续写文案（writer 的 expand /
     judge 的「续 JSON 尾巴」）；缺省 default_cont_msg。
+    refusal_check(text)->bool：可选·检测间歇性安全拒绝（HTTP200 非空但内容是短拒绝·绕过
+    空响应守卫）。仅 distill_replicate 复刻链传（避免污染 gen_writer/judge 正常路径）。命中 →
+    与瞬时重试**共享同一 attempt 预算**（retry.max_retries）重试同 profile；耗尽 → 记
+    REFUSAL_EXHAUSTED 降级下一 profile。
+    refusal_transform(user)->user：refusal 重试前改写 user（如追加「文学复刻无害」声明·须幂等
+    防 prompt 膨胀）。
     _stream_fn：测试注入点（签名同 stream_once）。
 
     抛 TransportExhausted（全链失败）。
@@ -614,21 +622,22 @@ def generate(loader_or_profiles, system: str, user: str, *,
             _client_kw["client"] = _OpenAI(api_key=profile.api_key, base_url=profile.base_url,
                                            timeout=DEFAULT_TIMEOUT)
 
+        current_user = user   # refusal_transform 可改写（追加声明）·续写圈沿用
         retries_used = 0
         try:
-            # —— 同 profile 重试圈 ——
+            # —— 同 profile 重试圈（瞬时错误 + 间歇性 refusal 共享 attempt 预算） ——
             # 瞬时类 TransportError（中转站偶发 404/5xx/断流）同 profile 重试；
             # 认证/账号类（401/403/key）不可恢复 → 立即降级不浪费退避。
             # TransportEmpty（内容过滤）也不重试。
+            # refusal_check 命中（HTTP200 非空但内容是短安全拒绝）→ 同 attempt 预算改写重试。
             attempt = 0
             while True:
                 try:
-                    text, finish = sfn(profile, system, user, mt,
+                    text, finish = sfn(profile, system, current_user, mt,
                                        prior_assistant=None, cont_msg=None,
                                        temperature=temperature,
                                        response_format_json=response_format_json,
                                        echo=echo, **_client_kw)
-                    break
                 except TransportEmpty:
                     raise                          # 空响应非瞬时 → 直接降级
                 except TransportError as re_err:
@@ -646,6 +655,21 @@ def generate(loader_or_profiles, system: str, user: str, *,
                     print(f"\n{tag} {profile.name} {type(re_err).__name__}，"
                           f"{delay:.0f}s 后重试 {attempt}/{retry.max_retries}（{src}）…")
                     time.sleep(delay)
+                    continue
+                # 成功拿到响应 —— refusal 守卫（仅 refusal_check 提供时·与瞬时重试共享 attempt）
+                if refusal_check is not None and refusal_check(text):
+                    attempt += 1
+                    retries_used = attempt
+                    if attempt > retry.max_retries:
+                        raise TransportError(f"REFUSAL_EXHAUSTED: {text.strip()[:80]}")
+                    if refusal_transform is not None:
+                        current_user = refusal_transform(current_user)
+                    delay = retry.delay_for(attempt)
+                    print(f"\n{tag} {profile.name} 疑似安全拒绝，{delay:.0f}s 后追加声明重试 "
+                          f"{attempt}/{retry.max_retries}…", file=sys.stderr)
+                    time.sleep(delay)
+                    continue
+                break
 
             # —— 截断续写圈（length → 续写补全 · 绝不整发重试） ——
             cont_rounds = 0
@@ -655,7 +679,7 @@ def generate(loader_or_profiles, system: str, user: str, *,
                         else default_cont_msg("length"))
                 print(f"\n{tag} 输出截断(finish=length)，续写 {cont_rounds}/"
                       f"{retry.max_cont_rounds}…", file=sys.stderr)
-                cont_text, finish = sfn(profile, system, user, mt,
+                cont_text, finish = sfn(profile, system, current_user, mt,
                                         prior_assistant=text, cont_msg=cmsg,
                                         temperature=temperature,
                                         response_format_json=response_format_json,

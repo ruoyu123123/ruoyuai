@@ -2,10 +2,12 @@
 
 锁定行为：
 1. llm_transport._is_refusal 纯检测 helper（gen_writer/av_judge 等正常路径不调）。
-2. distill_replicate.call_gen_model 在 stream 完成后主动调 → 命中走 3s 退避 + disclaimer 追加重试。
-3. 3 次全 refusal → REFUSAL_EXHAUSTED 记 failures → 走下一 fallback profile → 全链 refusal 抛
+2. distill_replicate.call_gen_model 委托 llm_transport.generate()，传 refusal_check=_is_refusal +
+   refusal_transform（追加 disclaimer）→ 命中走退避 + disclaimer 追加重试（refusal 与瞬时重试共享
+   RetryPolicy(max_retries=2) 的 attempt 预算·单 profile 最多 3 次尝试）。
+3. 3 次全 refusal → REFUSAL_EXHAUSTED 降级下一 fallback profile → 全链 refusal 抛
    GenModelExhaustedError（exit=3）。
-4. 拒绝重试始终生效。
+4. 拒绝重试始终生效（旧 REFUSAL_RETRY_ENABLED=0 开关不再能关闭）。
 """
 from __future__ import annotations
 import os
@@ -112,6 +114,7 @@ def _make_profile(name="active", model="gemini-3.1-pro", temperature=1.0):
     p.protocol = "openai"
     p.thinking_level = None
     p.reasoning_effort = None
+    p.max_prompt_chars = None   # 真实 profile 恒有此字段（int 或 None）·generate() 会读
     return p
 
 
@@ -169,8 +172,8 @@ class TestCallGenModelRefusalRetry:
             pass
         # 默认开 refusal-retry
         monkeypatch.setenv("REFUSAL_RETRY_" + "ENABLED", "1")
-        # 避免 reasoning_extra_body 干扰
-        monkeypatch.setattr(dr, "reasoning_extra_body", lambda p: None)
+        # reasoning_extra_body 现由 llm_transport 内部按 profile 调（mock profile 的
+        # thinking_level/reasoning_effort 均 None → 返回 {} → 不注入 extra_body·无需 patch）
         yield
 
     def _patch_openai(self, monkeypatch, fake_client):
