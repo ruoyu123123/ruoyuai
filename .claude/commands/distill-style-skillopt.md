@@ -17,9 +17,7 @@ $ARGUMENTS
 5. 训练按 epoch=4、rollout=40、minibatch=8、L_t=4→2 执行。动态候选缺稿时 checkpoint 记录 epoch/step/candidate digest 后 exit 2；主代理补齐 Agent 草稿后以同一 run_id 恢复。训练完成后 `scene_jobs.py --verify-all` 生成 step 4 批次回执，逐项绑定 job key、digest、cluster 与原始 Agent 回执。
 6. 提升 `best_skill.md` 为 `skill_FINAL.md`，再 spawn `novel-replica-writer` 写最终场景稿，required 运行 `distill_finalize_verify.py` 与 `distill_av_verify.py`，agent report 和两份验证报告缺一不可。
 
-训练完成后可运行
-`python core/scripts/skill_opt/train_dashboard.py --project workspace/styles/<书名>/`
-只读查看收敛曲线与健康告警；看板不改变训练状态，也不参与验收判定。
+训练进度与收敛数据以 `_skillopt/train/skillopt-main/training_checkpoint.json` 为准，直接读取该文件查看。
 
 ## 场景任务合同
 
