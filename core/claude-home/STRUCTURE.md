@@ -13,6 +13,7 @@
 │   ├── commands/                              # 用户级命令定义
 │   ├── agents/                                # Subagent 定义与 judge prompt 单一真理源
 │   └── settings.json                          # 项目设置
+├── .codex/                                    # Codex 跑道配置层（agents/*.toml 为 .claude/agents 镜像 + config.toml/hooks.json）
 ├── core/                                       # 系统核心代码
 │   ├── claude-home/                            # 系统主目录（见第四节）
 │   ├── scripts/                                # Python 确定性工具、scanner 与运行编排（见第四-ter 节）
@@ -24,7 +25,7 @@
 │   ├── styles/{书名}/                          # 全局风格库（见第二节）
 │   ├── novels/{书名}/                          # 小说项目（见第三节）
 │   └── _temp_research/                         # 实验证据链暂存区，默认不入 git
-├── start.sh / start.cmd                         # 跨平台启动入口（同步根 CLAUDE.md 到 core/claude-home/CLAUDE.md）
+├── start.sh / start.cmd                         # 跨平台启动入口（仓库根外启动时同步 core/claude-home/CLAUDE.md 入口桩 + .claude/commands 到当前目录）
 ├── .env.example / .gitattributes / .gitignore   # 环境示例、文本属性与追踪边界
 ├── pytest.ini / requirements.txt                # 测试与依赖配置
 ├── LICENSE                                      # 许可证
@@ -38,7 +39,7 @@
 - ✅ 风格库 = `workspace/styles/{书名}/`
 - ✅ 小说项目 = `workspace/novels/{书名}/`
 - ✅ 系统经验 = `core/claude-home/lessons/`
-- ✅ Agent 定义唯一权威位置 = `.claude/agents/`（`core/claude-home/` 不设 agents 副本）
+- ✅ Agent 定义唯一权威位置 = `.claude/agents/`（`.codex/agents/` 是 Codex 跑道 TOML 镜像，随权威同步；`core/claude-home/` 不设 agents 副本）
 
 ---
 
@@ -78,15 +79,17 @@ workspace/styles/{书名}/                         # 风格项目根
 │   │   ├── scene_*.txt                        # 每个候选独占的 Claude 场景稿
 │   │   └── agent_report.json                  # novel-replica-writer 回执
 │   ├── optimizer_patch_jobs.json              # skill digest × ep/step patch 提案 required 任务
-│   └── optimizer_patch_jobs/{ep_step}/{digest}/
-│       ├── trajectory_batch.json              # 轨迹素材（含 PROTECTED/REJECT_BUFFER 上下文）
-│       ├── skill_snapshot.md                  # 提案对象 skill 快照
-│       └── patches.json                       # novel-skill-author (MODE=patch) 亲笔提案
+│   ├── optimizer_patch_jobs/{ep_step}/{digest}/
+│   │   ├── trajectory_batch.json              # 轨迹素材（含 PROTECTED/REJECT_BUFFER 上下文）
+│   │   ├── skill_snapshot.md                  # 提案对象 skill 快照
+│   │   └── patches.json                       # novel-skill-author (MODE=patch) 亲笔提案
+│   └── replicas/{rollout_run}/                # rollout 复刻评分产物（{cluster}_replica.txt / _eval.json / _av.json + {cluster}_av_jobs/ AV 投票任务·novel-av-judge 亲笔判别）
 │
 ├── 对比报告/                                   # 闭环阶段 3 产物
 │   ├── eval_v{X}_cluster_{key}.json           # SFS 量化报告
 │   ├── diff_v{X}_cluster_{key}.md             # 多维度差距报告
 │   ├── ref_cluster_{key}.txt                  # 对照原文片段
+│   ├── av_v{N}.json + av_v{N}_jobs/           # AV 配对判别 advisory 报告 + 投票任务（av_judge_jobs.json / vote_* prompt·verdict / agent_receipt.json · novel-av-judge 亲笔判别 · distill_av_verify.py 渲染+聚合 · skillopt 终验收同构 skillopt_av_verify*_jobs/）
 │   └── ...
 │
 ├── 原文/                                       # 【可选】原文备份

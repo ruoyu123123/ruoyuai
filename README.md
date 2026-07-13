@@ -7,17 +7,17 @@
 ```
 /write
   选择或蒸馏作者风格
-  生成灵感卡并让用户选定方向
+  novel-outline-planner 亲笔写灵感卡并让用户选定方向
   调用 /outline
     初始化项目与 34 个核心子系统 JSON
-    生成卷级大势与事件池
+    novel-outline-planner 亲笔写卷级大势与事件池（gen_creative.py 确定性验收合并）
     只详化 cluster_001
   循环：
     /cluster-write
       build_manifest 生成注入清单
       novel-writer（Claude）亲笔逐场景写草稿 → gen_writer.py 调 gemini 分段润色出终稿
       audit_hub + reading/voice/foreshadow/reflect/summarize 做 cluster 级检查
-      通过后 splitter 按字数切章并生成标题
+      通过后 splitter 按字数切章，novel-titler 亲笔命名章标题
     /cluster-save-state
       回写事实、摘要、伏笔、角色、关系、评价与聚合账本
       涌现下一 cluster 的候选走向卡
@@ -39,11 +39,12 @@
 | 顾问制质检 | 风格和工艺问题走 advisory，可说明豁免；一致性、格式、穿帮等客观错误走 hard_gate |
 | 大势收敛，小势涌现 | 卷级终点固定，cluster 走向由用户选择、世界状态和剩余事件池共同涌现 |
 | 调研先行 | 方向性决策前必须有调研、用户输入或已有数据库依据 |
+| 创作亲笔 | 灵感卡、大纲/ME 池、走向卡、正文场景稿、章节标题、风格 skill 与 AV 评审全部由 CLI Claude 亲笔；外部 gen-model 只做对已有文本的等体量润色与按 brief 修复 |
 
 ## 主要能力
 
-- 作者风格蒸馏：从参考文本提取风格档案和可注入 skill。
-- 卷级大纲：生成阶段、事件池、cluster 规划和首块 scene storyboard。
+- 作者风格蒸馏：从参考文本提取风格档案，`novel-skill-author` 亲笔撰写可注入 skill，同栈复刻 + `novel-av-judge` AV 配对评审验证。
+- 卷级大纲：`novel-outline-planner` 亲笔生成阶段、事件池、cluster 规划和首块 scene storyboard，确定性脚本验收合并。
 - 故事块写作：Claude 亲笔逐场景写草稿（novel-writer agent · 含创作自评）→ `gen_writer.py` 调 gemini 分段等体量润色出终稿。
 - Cluster 级审核：机械 scanner、阅读反思、声纹检查、伏笔评估和经验沉淀都看整块文本。
 - 状态保存：`/cluster-save-state` 统一回写人物、世界、关系、伏笔、摘要、评价和下块候选。
@@ -86,7 +87,7 @@ ruoyuai/
 │   │   ├── templates/         # 子系统骨架
 │   │   ├── hooks/             # Claude Code hook
 │   │   └── plans/             # plan_tracker 模板
-│   └── scripts/               # 确定性脚本与 gen-model wrapper
+│   └── scripts/               # 确定性脚本与 gen-model 润色/修复 wrapper
 ├── tests/                     # pytest 测试
 └── workspace/                 # 用户小说、风格库、临时研究，默认不入库
 ```
@@ -101,7 +102,7 @@ cp .env.example .env
 claude --dangerously-skip-permissions
 ```
 
-配置 gen-model 后可查看当前写作模型：
+配置 gen-model（外部润色/修复模型）后可查看当前 profile：
 
 ```bash
 python core/scripts/gen_model.py show

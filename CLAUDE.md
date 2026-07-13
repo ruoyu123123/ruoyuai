@@ -110,6 +110,8 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 缺失 = hook L3 直接拦截。Agent 跑完由**主代理**调 `plan_tracker step <id> --n N`（不让 Agent 自己调，上下文释放后无法回写）。
 
+**Jobs pending 协议**：部分 required step 的脚本以 exit 2 = pending（如 `pending_av_jobs` / `pending_titles` / `pending_volume_arc_units`）声明「jobs manifest 已登记待补件」——主代理按 manifest spawn 对应 agent 补齐产物后**重跑同一命令**续跑验收；pending 期间不得调 `plan_tracker step`。具体 step、manifest 路径与退出码以各 plan JSON 的 `control_flow.exit_codes` 为准。
+
 ### 与 WAL 的关系
 
 - **WAL**：`cluster-save-state` **单命令内**的细粒度断点恢复（`completed_steps` 字段）— 单命令、细颗粒、断点续跑
@@ -149,7 +151,7 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 1. **选择/蒸馏风格** → `/distill-style` 或从风格库加载
 2. **强制调研先行** → spawn `novel-researcher` TASK_TYPE=inspiration
-3. **AI 生成 3 个灵感**（基于调研） → 每张灵感卡引用 ≥1 调研 source
+3. **灵感卡亲笔**：spawn `novel-outline-planner` MODE=brainstorm 读调研缓存亲笔写 3 张灵感卡 + `gen_creative.py --mode brainstorm --verify` 确定性验收 → 每张灵感卡引用 ≥1 调研 source
 4. **生成大纲** → `/outline`（卷级大势 + AskUser 每卷 cluster 数 + 34 子系统初始化 · 只详化 cluster_001）
 5. **直接开写** → 大纲确认后立即写第一个 cluster
 6. **逐故事块循环**（v26 cluster mode 唯一形态）：
@@ -382,6 +384,8 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 
 ## 🔴 正文生成：Claude 亲笔创作 + gemini 分段润色（+ splitter 字数切 + 跨 cluster 补料）
 
+> **🔴 亲笔创作总原则**：创作性产出——灵感卡 / 卷级大纲与 ME 池 / cluster 走向卡 / 正文场景稿 / 章节标题 / 风格 skill 撰写与 SkillOpt patch / AV 评审——全部由当前 CLI 的 Claude 亲笔（novel-writer / novel-outline-planner / novel-titler / novel-skill-author / novel-av-judge 等 agent 承载，确定性脚本只做机器验收）；外部 gen-model API 仅承担对已有文本的等体量润色与按 brief 定点修复（`gen_writer` / `gen_fixer` / `distill_replicate` / `voice_sample_polisher`）。
+
 正文由 Claude 逐场景创作，gemini 只做分段等体量润色。writer 不预设章数；splitter 在质检完成后按字数切章。
 
 ### 1. writer 两阶段（唯一形态）
@@ -435,7 +439,7 @@ python core/scripts/distill_replicate.py \
 
 ## 🔁 SkillOpt 范式精化（已有 skill 的训练循环）
 
-业界源 Microsoft Research arXiv:2605.23904 + microsoft/SkillOpt。把 skill.md 当**可训练的"权重"**：冻结目标模型，独立 optimizer 据 trajectory 改 skill，held-out validation 严格优于才升级，bounded edit 控破坏，reject buffer 防重蹈。
+业界源 Microsoft Research arXiv:2605.23904 + microsoft/SkillOpt。把 skill.md 当**可训练的"权重"**：冻结目标模型，patch 提案由 `novel-skill-author` MODE=patch 据 trajectory 亲笔提出（optimizer_patch_jobs manifest · exit 2=pending 补件），held-out validation 严格优于才升级，bounded edit 控破坏，reject buffer 防重蹈。
 
 **适用场景**：
 
@@ -447,18 +451,17 @@ python core/scripts/distill_replicate.py \
 **主循环**（论文超参 SearchQA 默认）：
 - `epoch=4` · `rollout_batch=40` · `minibatch=8`
 - `L_t` (textual learning rate) cosine decay `4→2`
-- 每 step：rollout → optimizer 出 ≤L_t 条 add/delete/replace patch → patch_applier → validation_gate 严格 `>` 才接受
-- ACCEPT → 升级 + 记 best；REJECT → reject_buffer (epoch-local 反哺 optimizer prompt)
+- 每 step：rollout → `novel-skill-author` MODE=patch 亲笔出 ≤L_t 条 add/delete/replace patch 提案 → patch_applier 确定性应用 → validation_gate 严格 `>` 才接受
+- ACCEPT → 升级 + 记 best；REJECT → reject_buffer (epoch-local 反哺下一批 trajectory_batch 的 `[REJECT_BUFFER]` 上下文)
 
 **北极星纪律**：
 - 优化对象=作者风格档（=第一权威），只压缩冗余/修破损口径，不引入新规则
-- SLOW_UPDATE 段（量化指纹：句长/段长/标点）**锁死**，optimizer 不许动
+- SLOW_UPDATE 段（量化指纹：句长/段长/标点）**锁死**，patch 提案不许动（trajectory_batch 标 `[PROTECTED]` · patch_applier 硬拒）
 - reward 只读现有 judge/scanner binary 信号 (`audit.verdict` + `reading.verdict` + `voice.drift==0` + `truth.lie==0`)，**不引入新 hard_gate**
 
 **落地**：
-- 5 模块 + train.py：`core/scripts/skill_opt/`
-- plan 模板：`distill-style-skillopt.plan.json` (5 步)
-- 测试：57/57 全绿（确定性 + mock LLM 集成）
+- `core/scripts/skill_opt/`：train.py 主循环 + rollout / scene_jobs / optimizer_jobs / patch_applier / validation_gate / reject_buffer / reward_sfs
+- plan 模板：`distill-style-skillopt.plan.json`（step 数以 plan JSON 为准）
 - SkillOpt 是风格 skill 的唯一训练入口
 
 ---

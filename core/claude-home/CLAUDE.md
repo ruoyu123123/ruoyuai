@@ -13,6 +13,7 @@
 6. **蒸馏复刻同栈（v29）**：先 spawn `novel-replica-writer` 按 skill 写 `claude_scenes/scene_*.txt` 与 `agent_report.json`，终稿只能由 `distill_replicate.py --claude-scenes-dir` 经 gemini 分段润色落盘。禁纯 gemini 从零直写复刻，也禁 agent 直产复刻终稿。
 7. **正文两阶段（v29）**：novel-writer（Claude 亲笔）逐场景写 `claude_scenes/`，`gen_writer.py` 只做 gemini 分段润色出终稿；写作链不预设章数，splitter 后期按 3000-4500 CJK/章切。
 8. **倒叙由 outline 排 storyboard + writer 按序写**：splitter 不重排。
+9. **亲笔创作分工**：灵感卡/卷级大纲单元（`novel-outline-planner` MODE=brainstorm / volume_arc_unit）、章标题（`novel-titler`）、skill 撰写与 SkillOpt patch 提案（`novel-skill-author` MODE=draft / patch）、AV 配对判别（`novel-av-judge`）都由 agent 亲笔产出，确定性脚本只做机器验收（验收不过 = 重 spawn 重写）；外部 gen-model 仅润色/修复（`gen_writer` / `gen_fixer` / `distill_replicate` / `voice_sample_polisher`），agent 不得调它产创作性文本。
 
 ## 路径权威
 

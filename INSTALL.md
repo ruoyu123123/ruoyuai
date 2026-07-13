@@ -53,7 +53,7 @@ pip install -r requirements.txt
 - `scipy` + `numpy` — 风格保真度量化
 - `requests` — 模型能力探测
 
-## 5. 配置 Gen-Model（写作用的二级模型）
+## 5. 配置 Gen-Model（润色/修复用的二级模型）
 
 ```bash
 cp .env.example .env
@@ -190,9 +190,9 @@ cat .claude/settings.json
 ```
 1. 调研先行（联网搜热点）     ~30s
 2. outline-planner（拟首块走向骨架） ~30s
-3. novel-writer（Claude 亲笔逐场景写 + gemini 分段润色）60-180s（按模型速度）
+3. novel-writer（Claude 亲笔逐场景写）+ gen-model 分段润色 60-180s（按模型速度）
 4. cluster 级审核/阅读/声纹/伏笔/摘要 60-120s
-5. chapter-splitter（审核后切自然截断点） ~10s
+5. chapter-splitter（审核后切自然截断点）+ novel-titler 亲笔章标题 ~60s
 6. /cluster-save-state（状态回库与下块涌现） ~30s
 ```
 
