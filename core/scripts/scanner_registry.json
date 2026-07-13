@@ -1553,6 +1553,27 @@
       "_new": true,
       "issues_emitted": ["WEAK_CAUSAL_LINK"]
     },
+    "scene_gap_probe": {
+      "layer": "cluster",
+      "script": "scene_gap_probe.py",
+      "doc": "[2026-06-21 R20 W9 Batch-BB·P2·McKee《Story》GAP][2026-07-13 休眠接线 audit_hub cluster-mode]scene_storyboard 每 scene 的 (expectation, actual_outcome, gap_type) 三字段填充率<0.3 或全 no_gap → SCENE_GAP_ABSENT·单一 gap_type 占比>0.7 → SCENE_GAP_MONOTONE·只查 storyboard 声明字段(无二阶草稿验证·_second_order_av_placeholder=true)·input=事件簇.json 非草稿文本·env SCENE_GAP_PROBE_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SCENE_GAP_ABSENT", "SCENE_GAP_MONOTONE"]
+    },
+    "value_polarity_probe": {
+      "layer": "cluster",
+      "script": "value_polarity_probe.py",
+      "doc": "[2026-06-21 R20 W9 Batch-BB·P2·Coyne/McKee 价值极性][2026-07-13 休眠接线 audit_hub cluster-mode]scene_storyboard 每 scene 的 (value_axis, start_polarity, end_polarity) 三字段·start==end(无翻转) → VALUE_NO_TURN·turn_fidelity_rate<0.7 → TURN_FIDELITY_LOW·只查 storyboard 声明字段(无二阶草稿验证·_second_order_av_placeholder=true)·input=事件簇.json 非草稿文本·env VALUE_POLARITY_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["VALUE_NO_TURN", "TURN_FIDELITY_LOW"]
+    },
+    "sequel_drought_advisory": {
+      "layer": "cluster",
+      "script": "sequel_drought_advisory.py",
+      "doc": "[2026-06-21 R20 W9 Batch-BB·P2·Swain Scene/Sequel][2026-07-13 休眠接线 audit_hub cluster-mode+unit_type 迁 scene_type]scene_storyboard 每 scene 的 scene_type(proactive_scene/reactive_sequel)·最长连续 proactive_scene 不被 reactive_sequel 打断超题材阈值(爽文5/严肃3/作者档 author_sequel_baseline.max_scene_run 覆盖) → SEQUEL_DROUGHT·scene_type 填充率<0.3 → SCENE_TYPE_MISSING·input=事件簇.json 非草稿文本·env SEQUEL_DROUGHT_MODE 默认 shadow·advisory·绝不 hard_gate",
+      "_new": true,
+      "issues_emitted": ["SEQUEL_DROUGHT", "SCENE_TYPE_MISSING"]
+    },
     "direction_card_poetics_scanner": {
       "layer": "cluster",
       "script": "direction_card_poetics_scanner.py",

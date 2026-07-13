@@ -130,19 +130,65 @@ def test_shadow_no_violation():
         _set_mode(bak)
 
 
-def test_load_storyboard_from_brief(tmp_path):
-    path = tmp_path / "brief.json"
-    path.write_text(json.dumps(
-        {"clusters": [{"cluster_id": "cluster_001", "scene_storyboard": _FULL_SB}]},
-        ensure_ascii=False), encoding="utf-8")
-    sb = mod._load_storyboard(str(path))
-    assert sb == _FULL_SB
+def _write_event_cluster(project_root, clusters):
+    db = project_root / "_数据库"
+    db.mkdir(parents=True, exist_ok=True)
+    (db / "事件簇.json").write_text(
+        json.dumps({"clusters": clusters}, ensure_ascii=False), encoding="utf-8")
 
 
-def test_load_storyboard_direct_list(tmp_path):
-    path = tmp_path / "sb.json"
-    path.write_text(json.dumps(_FULL_SB, ensure_ascii=False), encoding="utf-8")
-    assert mod._load_storyboard(str(path)) == _FULL_SB
+def test_scan_selects_target_cluster_not_first_match(tmp_path):
+    """回归锁：多 cluster 均非空 scene_storyboard 时，scan() 按 cluster_id 精确选中目标
+    cluster，不是 first-match-wins（旧 _load_storyboard 的 bug）。cluster_001 是 _EMPTY_SB
+    (会触发 SCENE_GAP_ABSENT)，cluster_002 是 _FULL_SB(干净)——若选错会误报或漏报。"""
+    bak = os.environ.get("SCENE_GAP_PROBE_MODE")
+    try:
+        _set_mode("active")
+        _write_event_cluster(tmp_path, [
+            {"cluster_id": "cluster_001", "scene_storyboard": _EMPTY_SB},
+            {"cluster_id": "cluster_002", "scene_storyboard": _FULL_SB},
+        ])
+        out = mod.scan(str(tmp_path), "cluster_002")
+        assert out["violations"] == []
+        assert out["per_cluster"] == [{"cluster_id": "cluster_002", "scenes_total": 4}]
+    finally:
+        _set_mode(bak)
+
+
+def test_scan_cluster_001_not_skipped(tmp_path):
+    """cluster_001 不像 pre_write_gate 那样被跳过——storyboard 工艺质量对首块同样适用。"""
+    bak = os.environ.get("SCENE_GAP_PROBE_MODE")
+    try:
+        _set_mode("active")
+        _write_event_cluster(tmp_path, [
+            {"cluster_id": "cluster_001", "scene_storyboard": _EMPTY_SB},
+        ])
+        out = mod.scan(str(tmp_path), "cluster_001")
+        codes = {v["code"] for v in out["violations"]}
+        assert "SCENE_GAP_ABSENT" in codes
+    finally:
+        _set_mode(bak)
+
+
+def test_scan_missing_brief_no_crash(tmp_path):
+    (tmp_path / "_数据库").mkdir()
+    out = mod.scan(str(tmp_path), "cluster_003")
+    assert out["violations"] == []
+    assert out["verdict"] == "PASS"
+
+
+def test_scan_shadow_mode_suppresses_violations(tmp_path):
+    bak = os.environ.get("SCENE_GAP_PROBE_MODE")
+    try:
+        _set_mode("shadow")
+        _write_event_cluster(tmp_path, [
+            {"cluster_id": "cluster_001", "scene_storyboard": _EMPTY_SB},
+        ])
+        out = mod.scan(str(tmp_path), "cluster_001")
+        assert out["violations"] == []
+        assert out["mode"] == "shadow"
+    finally:
+        _set_mode(bak)
 
 
 def test_invalid_gap_type_counted():

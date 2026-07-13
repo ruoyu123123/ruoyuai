@@ -35,15 +35,16 @@ def _mk_project(genre_tags=None, baseline=None):
 
 
 _GOOD_SB = [
-    {"unit_type": "scene"}, {"unit_type": "sequel"},
-    {"unit_type": "scene"}, {"unit_type": "sequel"},
-    {"unit_type": "scene"}, {"unit_type": "sequel"},
+    {"scene_type": "proactive_scene"}, {"scene_type": "reactive_sequel"},
+    {"scene_type": "proactive_scene"}, {"scene_type": "reactive_sequel"},
+    {"scene_type": "proactive_scene"}, {"scene_type": "reactive_sequel"},
 ]
 
 _LONG_RUN_SB = [
-    {"unit_type": "scene"}, {"unit_type": "scene"}, {"unit_type": "scene"},
-    {"unit_type": "scene"}, {"unit_type": "scene"}, {"unit_type": "scene"},
-    {"unit_type": "scene"}, {"unit_type": "sequel"},
+    {"scene_type": "proactive_scene"}, {"scene_type": "proactive_scene"},
+    {"scene_type": "proactive_scene"}, {"scene_type": "proactive_scene"},
+    {"scene_type": "proactive_scene"}, {"scene_type": "proactive_scene"},
+    {"scene_type": "proactive_scene"}, {"scene_type": "reactive_sequel"},
 ]
 
 _UNTYPED_SB = [{"summary": "x"} for _ in range(6)]
@@ -101,7 +102,7 @@ def test_long_run_literary_stricter():
     try:
         _set_mode("active")
         proj = _mk_project(genre_tags=["严肃"])
-        sb = [{"unit_type": "scene"}] * 4 + [{"unit_type": "sequel"}]
+        sb = [{"scene_type": "proactive_scene"}] * 4 + [{"scene_type": "reactive_sequel"}]
         out = mod.advise(sb, proj)
         codes = {f["code"] for f in out.get("flags", [])}
         # 4 > 3 (literary 阈)
@@ -111,13 +112,13 @@ def test_long_run_literary_stricter():
         _set_mode(bak)
 
 
-def test_unit_type_missing_flagged():
+def test_scene_type_missing_flagged():
     bak = os.environ.get("SEQUEL_DROUGHT_MODE")
     try:
         _set_mode("active")
         out = mod.advise(_UNTYPED_SB)
         codes = {f["code"] for f in out.get("flags", [])}
-        assert "UNIT_TYPE_MISSING" in codes
+        assert "SCENE_TYPE_MISSING" in codes
     finally:
         _set_mode(bak)
 
@@ -128,7 +129,7 @@ def test_author_baseline_override():
         _set_mode("active")
         proj = _mk_project(genre_tags=["严肃"],
                            baseline={"max_scene_run": 20})
-        sb = [{"unit_type": "scene"}] * 4 + [{"unit_type": "sequel"}]
+        sb = [{"scene_type": "proactive_scene"}] * 4 + [{"scene_type": "reactive_sequel"}]
         out = mod.advise(sb, proj)
         codes = {f["code"] for f in out.get("flags", [])}
         assert "SEQUEL_DROUGHT" not in codes
@@ -149,14 +150,51 @@ def test_shadow_no_violation():
 
 
 def test_max_scene_run_calc():
-    # 同 _LONG_RUN_SB · 7 连续 scene + 1 sequel · max_run=7
+    # 同 _LONG_RUN_SB · 7 连续 proactive_scene + 1 reactive_sequel · max_run=7
     assert mod._max_scene_run(_LONG_RUN_SB) == 7
-    # 全 sequel = 0
-    assert mod._max_scene_run([{"unit_type": "sequel"}] * 5) == 0
+    # 全 reactive_sequel = 0
+    assert mod._max_scene_run([{"scene_type": "reactive_sequel"}] * 5) == 0
 
 
-def test_load_storyboard(tmp_path):
-    path = tmp_path / "sb.json"
-    path.write_text(json.dumps({"scene_storyboard": _GOOD_SB}, ensure_ascii=False),
-                    encoding="utf-8")
-    assert mod._load_storyboard(str(path)) == _GOOD_SB
+def _write_event_cluster(project_root, clusters):
+    db = project_root / "_数据库"
+    db.mkdir(parents=True, exist_ok=True)
+    (db / "事件簇.json").write_text(
+        json.dumps({"clusters": clusters}, ensure_ascii=False), encoding="utf-8")
+
+
+def test_scan_selects_target_cluster_not_first_match(tmp_path):
+    """回归锁：多 cluster 均非空 scene_storyboard 时，scan() 按 cluster_id 精确选中目标
+    cluster，不是 first-match-wins（旧 _load_storyboard 的 bug）。"""
+    bak = os.environ.get("SEQUEL_DROUGHT_MODE")
+    try:
+        _set_mode("active")
+        _write_event_cluster(tmp_path, [
+            {"cluster_id": "cluster_001", "scene_storyboard": _LONG_RUN_SB},
+            {"cluster_id": "cluster_002", "scene_storyboard": _GOOD_SB},
+        ])
+        out = mod.scan(str(tmp_path), "cluster_002")
+        assert out["violations"] == []
+    finally:
+        _set_mode(bak)
+
+
+def test_scan_cluster_001_not_skipped(tmp_path):
+    bak = os.environ.get("SEQUEL_DROUGHT_MODE")
+    try:
+        _set_mode("active")
+        _write_event_cluster(tmp_path, [
+            {"cluster_id": "cluster_001", "scene_storyboard": _LONG_RUN_SB},
+        ])
+        out = mod.scan(str(tmp_path), "cluster_001")
+        codes = {v["code"] for v in out["violations"]}
+        assert "SEQUEL_DROUGHT" in codes
+    finally:
+        _set_mode(bak)
+
+
+def test_scan_missing_brief_no_crash(tmp_path):
+    (tmp_path / "_数据库").mkdir()
+    out = mod.scan(str(tmp_path), "cluster_003")
+    assert out["violations"] == []
+    assert out["verdict"] == "PASS"

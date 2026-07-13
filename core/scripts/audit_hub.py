@@ -3171,6 +3171,39 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "causal_connector_scanner",
                      "WEAK_CAUSAL_LINK", "剧情")),
+                # [R20 W9 Batch-BB·P2·McKee《Story》GAP] scene_storyboard 每 scene 的
+                # (expectation, actual_outcome, gap_type) 三字段填充率过低或 gap_type 单一 →
+                # SCENE_GAP_ABSENT/SCENE_GAP_MONOTONE · 只查 storyboard 声明字段(无二阶草稿验证)·
+                # input=事件簇.json 非草稿文本 · SCENE_GAP_PROBE_MODE 默认 shadow ·
+                # advisory（绝不 hard_gate）
+                ("scene_gap_probe",
+                 [child_python(), str(_SCRIPT_DIR / "scene_gap_probe.py"),
+                  "--project", str(project_root), "--cluster", cluster_id_full],
+                 {0, 1},
+                 lambda out, code: _parse_multi_code_violations_scanner(
+                     out, "scene_gap_probe", "SCENE_GAP_ABSENT", "剧情")),
+                # [R20 W9 Batch-BB·P2·Coyne/McKee 价值极性] scene_storyboard 每 scene 的
+                # (value_axis, start_polarity, end_polarity) 三字段·start==end(无翻转)→
+                # VALUE_NO_TURN·翻转率<0.7→TURN_FIDELITY_LOW · input=事件簇.json 非草稿文本 ·
+                # VALUE_POLARITY_MODE 默认 shadow · advisory（绝不 hard_gate）
+                ("value_polarity_probe",
+                 [child_python(), str(_SCRIPT_DIR / "value_polarity_probe.py"),
+                  "--project", str(project_root), "--cluster", cluster_id_full],
+                 {0, 1},
+                 lambda out, code: _parse_multi_code_violations_scanner(
+                     out, "value_polarity_probe", "VALUE_NO_TURN", "剧情")),
+                # [R20 W9 Batch-BB·P2·Swain Scene/Sequel] scene_storyboard 每 scene 的
+                # scene_type(proactive_scene/reactive_sequel)·最长连续 scene 不被 sequel 打断
+                # 超题材阈值(爽文5/严肃3/作者档覆盖)→SEQUEL_DROUGHT·填充率<0.3→
+                # SCENE_TYPE_MISSING(2026-07-13 从已废弃的 unit_type 迁到必产字段 scene_type)·
+                # input=事件簇.json 非草稿文本 · SEQUEL_DROUGHT_MODE 默认 shadow ·
+                # advisory（绝不 hard_gate）
+                ("sequel_drought_advisory",
+                 [child_python(), str(_SCRIPT_DIR / "sequel_drought_advisory.py"),
+                  "--project", str(project_root), "--cluster", cluster_id_full],
+                 {0, 1},
+                 lambda out, code: _parse_multi_code_violations_scanner(
+                     out, "sequel_drought_advisory", "SEQUEL_DROUGHT", "节奏")),
             ])
             # 当前 cluster 的通用顾问任务与题材专属任务共用同一调度列表。
             # LitRPG 若已由题材包路由，本地适用题材门控不再重复追加。

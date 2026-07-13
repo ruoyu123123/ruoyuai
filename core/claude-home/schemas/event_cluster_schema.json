@@ -352,7 +352,7 @@
                     "scene",
                     "sequel"
                   ],
-                  "_doc": "R20 P2 (Swain Scene/Sequel id 7): scene 单元(目标→冲突→灾难) 或 sequel 单元(反应→困境→决定)"
+                  "_doc": "R20 P2 (Swain Scene/Sequel id 7): scene 单元(目标→冲突→灾难) 或 sequel 单元(反应→困境→决定)。2026-07-13：sequel_drought_advisory 已改读 scene_type(proactive_scene/reactive_sequel，✅必产字段，见下 scene_causal_fields)，本字段不再被任何脚本消费，历史数据可能仍带此可选字段。"
                 },
                 "sequel_goal": {
                   "type": "string",

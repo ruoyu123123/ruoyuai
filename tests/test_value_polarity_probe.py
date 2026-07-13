@@ -132,13 +132,48 @@ def test_shadow_no_violation():
         _set_mode(bak)
 
 
-def test_load_storyboard_from_brief(tmp_path):
-    path = tmp_path / "brief.json"
-    path.write_text(json.dumps(
-        {"clusters": [{"cluster_id": "cluster_001", "scene_storyboard": _TURN_FULL}]},
-        ensure_ascii=False), encoding="utf-8")
-    sb = mod._load_storyboard(str(path))
-    assert sb == _TURN_FULL
+def _write_event_cluster(project_root, clusters):
+    db = project_root / "_数据库"
+    db.mkdir(parents=True, exist_ok=True)
+    (db / "事件簇.json").write_text(
+        json.dumps({"clusters": clusters}, ensure_ascii=False), encoding="utf-8")
+
+
+def test_scan_selects_target_cluster_not_first_match(tmp_path):
+    """回归锁：多 cluster 均非空 scene_storyboard 时，scan() 按 cluster_id 精确选中目标
+    cluster，不是 first-match-wins（旧 _load_storyboard 的 bug）。"""
+    bak = os.environ.get("VALUE_POLARITY_MODE")
+    try:
+        _set_mode("active")
+        _write_event_cluster(tmp_path, [
+            {"cluster_id": "cluster_001", "scene_storyboard": _NO_TURN},
+            {"cluster_id": "cluster_002", "scene_storyboard": _TURN_FULL},
+        ])
+        out = mod.scan(str(tmp_path), "cluster_002")
+        assert out["violations"] == []
+    finally:
+        _set_mode(bak)
+
+
+def test_scan_cluster_001_not_skipped(tmp_path):
+    bak = os.environ.get("VALUE_POLARITY_MODE")
+    try:
+        _set_mode("active")
+        _write_event_cluster(tmp_path, [
+            {"cluster_id": "cluster_001", "scene_storyboard": _NO_TURN},
+        ])
+        out = mod.scan(str(tmp_path), "cluster_001")
+        codes = {v["code"] for v in out["violations"]}
+        assert "VALUE_NO_TURN" in codes
+    finally:
+        _set_mode(bak)
+
+
+def test_scan_missing_brief_no_crash(tmp_path):
+    (tmp_path / "_数据库").mkdir()
+    out = mod.scan(str(tmp_path), "cluster_003")
+    assert out["violations"] == []
+    assert out["verdict"] == "PASS"
 
 
 def test_polarity_rank_complete():

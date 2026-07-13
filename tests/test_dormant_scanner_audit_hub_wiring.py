@@ -58,6 +58,13 @@ _WIRED = [
       "PACE_CARRIER_PURE_RHYTHM_HOOK"]),
     ("causal_connector_scanner", "causal_connector_scanner.py",
      "WEAK_CAUSAL_LINK", ["WEAK_CAUSAL_LINK"]),
+    # 2026-07-13 第三批休眠 scanner 接线（storyboard 型·读事件簇.json 非草稿正文）
+    ("scene_gap_probe", "scene_gap_probe.py",
+     "SCENE_GAP_ABSENT", ["SCENE_GAP_ABSENT", "SCENE_GAP_MONOTONE"]),
+    ("value_polarity_probe", "value_polarity_probe.py",
+     "VALUE_NO_TURN", ["VALUE_NO_TURN", "TURN_FIDELITY_LOW"]),
+    ("sequel_drought_advisory", "sequel_drought_advisory.py",
+     "SEQUEL_DROUGHT", ["SEQUEL_DROUGHT", "SCENE_TYPE_MISSING"]),
 ]
 
 

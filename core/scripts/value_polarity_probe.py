@@ -20,6 +20,8 @@ end_polarity 必须翻转或递进（不能持平）· LLM 默认 neutral→neut
   （无二阶草稿验证 · 输出 _second_order_av_placeholder=true 如实标注）。
 
 【北极星】②④⑤ advisory shadow · 绝不 hard_gate
+
+用法: python value_polarity_probe.py --project <项目根> [--cluster <cluster_id>]
 """
 from __future__ import annotations
 
@@ -28,6 +30,9 @@ import json
 import os
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_lookup as cl  # noqa: E402
 
 ISSUE_CODE_NO_TURN = "VALUE_NO_TURN"
 ISSUE_CODE_LOW = "TURN_FIDELITY_LOW"
@@ -45,18 +50,27 @@ def _mode() -> str:
     return m if m in ("off", "shadow", "active") else "shadow"
 
 
-def _load_storyboard(path: str) -> list[dict]:
-    obj = json.loads(Path(path).read_text(encoding="utf-8"))
-    if isinstance(obj, dict):
-        if isinstance(obj.get("scene_storyboard"), list):
-            return obj["scene_storyboard"]
-        for c in (obj.get("clusters") or []):
-            if isinstance(c, dict) and isinstance(c.get("scene_storyboard"), list):
-                return c["scene_storyboard"]
-        return []
-    if isinstance(obj, list):
-        return obj
-    return []
+def _load_json(path: Path, default=None):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return default
+
+
+def _iter_cluster_storyboards(project_root, cluster_id=None):
+    """按 cluster_id 精确匹配（cluster_lookup.normalize_cluster_id）定位目标 cluster 的
+    scene_storyboard；cluster_id 省略=遍历项目内所有非空 storyboard 的 cluster。"""
+    data = _load_json(Path(project_root) / "_数据库" / "事件簇.json", {}) or {}
+    target = cl.normalize_cluster_id(cluster_id) if cluster_id else None
+    for c in data.get("clusters") or []:
+        if not isinstance(c, dict):
+            continue
+        cid = cl.normalize_cluster_id(c.get("cluster_id"))
+        if target and cid != target:
+            continue
+        sb = c.get("scene_storyboard")
+        if isinstance(sb, list) and sb:
+            yield cid, sb
 
 
 def probe(storyboard: list[dict]) -> dict:
@@ -132,16 +146,45 @@ def probe(storyboard: list[dict]) -> dict:
     return out
 
 
+def scan(project_root, cluster_id=None) -> dict:
+    """project/cluster 解析层（仿 causal_connector_scanner.scan 分层）：按 cluster_id 精确定位
+    目标 cluster 的 scene_storyboard，调用 probe() 纯函数分析，聚合结果并按 cluster_id 打标签。
+    probe() 内部已按 _mode() 自行决定是否写入 violations（shadow 恒空）·本层不重复判断。"""
+    mode = _mode()
+    out = {"scanner": "value_polarity_probe", "schema_version": "1.0", "mode": mode,
+           "gate_level": "advisory", "violations": [], "verdict": "PASS", "warning": None}
+    if mode == "off":
+        return out
+    if not project_root or not Path(project_root).exists():
+        out["note"] = "无项目根·跳过"
+        return out
+    all_violations, per_cluster = [], []
+    for cid, storyboard in _iter_cluster_storyboards(project_root, cluster_id):
+        try:
+            rep = probe(storyboard)
+        except Exception as e:
+            per_cluster.append({"cluster_id": cid, "error": str(e)})
+            continue
+        for v in rep.get("violations", []):
+            all_violations.append({**v, "cluster_id": cid})
+        per_cluster.append({"cluster_id": cid, "scenes_total": rep.get("scenes_total")})
+    out["per_cluster"] = per_cluster
+    if not per_cluster:
+        out["note"] = "无标注 scene_storyboard 或未命中目标 cluster"
+    out["violations"] = all_violations
+    if all_violations:
+        out["verdict"] = "FAIL_MINOR"
+        out["warning"] = "·".join(v.get("message", "") for v in all_violations)
+    out["violations_count"] = len(all_violations)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description="Coyne/McKee value polarity probe (shadow)")
-    ap.add_argument("storyboard_path")
+    ap.add_argument("--project", required=True)
+    ap.add_argument("--cluster", default=None, help="cluster_id（省略=扫所有标注 storyboard 的 cluster）")
     args = ap.parse_args()
-    try:
-        sb = _load_storyboard(args.storyboard_path)
-    except (OSError, json.JSONDecodeError) as e:
-        print(json.dumps({"error": f"加载失败：{e}"}, ensure_ascii=False))
-        sys.exit(2)
-    rep = probe(sb)
+    rep = scan(args.project, args.cluster)
     print(json.dumps(rep, ensure_ascii=False, indent=2))
     sys.exit(1 if rep.get("warning") else 0)
 
