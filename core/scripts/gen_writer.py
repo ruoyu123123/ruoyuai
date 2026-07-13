@@ -23,6 +23,7 @@ changes.json 仅承载创作期自评（self_eval / waivers · Claude step 2a �
 """
 from __future__ import annotations
 import argparse
+import copy
 import json
 import os
 import re
@@ -41,7 +42,9 @@ from gen_model_loader import (  # noqa: E402
     PromptTooLargeError,
     Profile,
     reasoning_extra_body,
+    resolve_max_tokens,
 )
+import llm_transport  # noqa: E402 · 统一 transport 层（重试/续写/双协议分发单一真理源）
 import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化权威口径
 import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster_006" ↔ "6"）
 from atomic_json import atomic_write_text  # noqa: E402 · 草稿/CHANGES 产物原子落盘（崩溃不留半截）
@@ -85,38 +88,7 @@ def check_deps():
         sys.exit(2)
 
 
-# ============ Max tokens 解析 ============
-def load_model_capabilities_cache() -> dict:
-    """加载 model_probe.py 写出的能力缓存"""
-    try:
-        from frozen_util import user_data_dir as _udd
-        cache_path = _udd() / '.claude' / '.model_capabilities.json'
-    except Exception:
-        cache_path = Path(__file__).parent.parent.parent / '.claude' / '.model_capabilities.json'
-    if not cache_path.exists():
-        return {}
-    try:
-        return json.loads(cache_path.read_text(encoding='utf-8'))
-    except Exception:
-        return {}
-
-
-def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
-    """决定 max_tokens 的优先级：
-       1. profile.max_tokens 显式（最高）
-       2. 缓存的 recommended_max_tokens_for_writing
-       3. 保守默认值 16000
-       返回 (max_tokens, source)
-    """
-    if profile.max_tokens is not None:
-        return profile.max_tokens, 'profile_explicit'
-
-    cache = load_model_capabilities_cache()
-    caps = cache.get('model_capabilities', {}).get(profile.model)
-    if caps:
-        return caps.get('recommended_max_tokens_for_writing', 16000), f"cache:{caps.get('source','unknown')}"
-
-    return 16000, 'default_fallback_16k_NO_PROBE_YET'
+# resolve_max_tokens 单一真理源见 gen_model_loader.py（gen_writer/gen_fixer 共用）
 
 
 # ============ v29 helpers ============
@@ -1847,147 +1819,6 @@ def _build_cont_msg(cont_reason: str) -> str:
     return cont_msg
 
 
-def _stream_once(client, profile, system: str, user: str, max_tokens: int,
-                 prior_assistant: str | None = None, cont_reason: str = "length") -> tuple[str, "str | None"]:
-    """单次 stream 生成，返回 (text, finish_reason)。
-
-    协议分发：profile.protocol == 'gemini' → 走原生 streamGenerateContent（隐式前缀缓存）；
-    否则走 OpenAI /v1/chat/completions（client 已建好）。
-    捕获 finish_reason（命中 max_tokens 的截断别静默吞）。prior_assistant 非空 → 续写模式。
-    cont_reason：'length'=截断续写；'changes_only'=只补 CHANGES。
-    """
-    # prompt 大小预检——超过 profile.max_prompt_chars 直接跳 fallback，不等 100s 超时
-    _max_pc = getattr(profile, "max_prompt_chars", None)
-    if _max_pc and (len(system) + len(user)) > _max_pc:
-        raise PromptTooLargeError(
-            f"prompt {len(system)+len(user)} chars > {profile.name}.max_prompt_chars={_max_pc}，跳 fallback")
-
-    if getattr(profile, "protocol", "openai") == "gemini":
-        return _stream_once_gemini(profile, system, user, max_tokens, prior_assistant, cont_reason)
-
-    messages = [{"role": "system", "content": system},
-                {"role": "user", "content": user}]
-    if prior_assistant:
-        messages.append({"role": "assistant", "content": prior_assistant})
-        messages.append({"role": "user", "content": _build_cont_msg(cont_reason)})
-    _create_kw = dict(model=profile.model, messages=messages, max_tokens=max_tokens,
-                      temperature=profile.temperature, stream=True)
-    # reasoning 控制 extra_body（thinking_level=gemini 专有/reasoning_effort=OpenAI 标准·helper
-    # 单一真理源·按 profile 配·防 thinking 暴走·部分中转站 thinking_level 被忽略会导致暴走 500）。
-    _wr_extra = reasoning_extra_body(profile)
-    if _wr_extra:
-        _create_kw["extra_body"] = _wr_extra
-    try:
-        import gen_throttle
-        gen_throttle.wait()   # 限速端点（中转站 <15rpm）：请求前全局节流·默认关零回归
-    except Exception:
-        pass
-    stream = client.chat.completions.create(**_create_kw)
-    text = ""
-    finish_reason = None
-    for chunk in stream:
-        if not chunk.choices:
-            continue
-        choice = chunk.choices[0]
-        piece = getattr(choice.delta, 'content', None)
-        if piece:
-            text += piece
-            sys.stderr.write(piece)
-            sys.stderr.flush()
-        if getattr(choice, 'finish_reason', None):
-            finish_reason = choice.finish_reason
-    return text, finish_reason
-
-
-def _gemini_host(base_url: str) -> str:
-    """从 OpenAI 风格 base_url(.../v1) 推 gemini 原生 host(去掉 /v1 尾)。"""
-    return base_url.rsplit("/v1", 1)[0] if "/v1" in base_url else base_url.rstrip("/")
-
-
-def _stream_once_gemini(profile, system: str, user: str, max_tokens: int,
-                        prior_assistant: str | None = None, cont_reason: str = "length") -> tuple[str, "str | None"]:
-    """gemini 原生协议 streamGenerateContent（SSE）· 稳定 system 放 systemInstruction → 隐式前缀缓存命中。
-
-    返回 (text, finish_reason)，finish_reason 归一到 openai 口径（MAX_TOKENS→'length' 触发续写·其余→'stop'），
-    上层截断续写逻辑零改动复用。缓存命中 cachedContentTokenCount 打到 stderr 可见。
-    """
-    import urllib.request
-
-    host = _gemini_host(profile.base_url)
-    url = f"{host}/v1beta/models/{profile.model}:streamGenerateContent?alt=sse&key={profile.api_key}"
-
-    contents = [{"role": "user", "parts": [{"text": user}]}]
-    if prior_assistant:
-        contents.append({"role": "model", "parts": [{"text": prior_assistant}]})
-        contents.append({"role": "user", "parts": [{"text": _build_cont_msg(cont_reason)}]})
-    body = {
-        "systemInstruction": {"parts": [{"text": system}]},  # 稳定前缀(system+skill) → 跨调用隐式缓存
-        "contents": contents,
-        "generationConfig": {"maxOutputTokens": max_tokens, "temperature": profile.temperature},
-    }
-    req = urllib.request.Request(
-        url, data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
-
-    text = ""
-    finish_raw = None
-    usage = {}
-    # 🔴 BYOK 脱敏：gemini key 在 URL（?key=<KEY>），urlopen 的 HTTPError/URLError str()
-    # 会带整条 URL，经 stderr 外泄。BYOK 路由真实用户 key 必须脱敏后再抛/打印。
-    try:
-        import gen_throttle
-        gen_throttle.wait()   # 限速端点全局节流（gemini native path）
-    except Exception:
-        pass
-    try:
-        resp = urllib.request.urlopen(req, timeout=GEN_MODEL_TIMEOUT)
-    except Exception as _e:
-        try:
-            from secrets_store import redact as _redact
-        except Exception:
-            def _redact(s):  # 兜底：至少截断 key=
-                import re as _r
-                return _r.sub(r"(key=)[^&\s]+", r"\1***", str(s))
-        raise RuntimeError(f"gemini 请求失败: {_redact(str(_e))}") from None
-    for raw in resp:  # 按行迭代 SSE（每事件一行 data: {json}）
-        line = raw.decode("utf-8", "ignore").strip()
-        if not line.startswith("data:"):
-            continue
-        payload = line[5:].strip()
-        if not payload or payload == "[DONE]":
-            continue
-        try:
-            d = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        for c0 in (d.get("candidates") or [])[:1]:
-            for part in (c0.get("content", {}).get("parts") or []):
-                if part.get("thought"):  # 跳过 reasoning thought 段（只要正文）
-                    continue
-                t = part.get("text")
-                if t:
-                    text += t
-                    sys.stderr.write(t)
-                    sys.stderr.flush()
-            if c0.get("finishReason"):
-                finish_raw = c0["finishReason"]
-        if d.get("usageMetadata"):
-            usage = d["usageMetadata"]
-
-    cached = usage.get("cachedContentTokenCount")
-    if cached:
-        logger.info(f"\n[gen_writer][gemini] 🟢 缓存命中 cachedContentTokenCount={cached}"
-              f"/{usage.get('promptTokenCount', '?')} prompt tokens（省 input 成本）")
-    finish_reason = "length" if finish_raw == "MAX_TOKENS" else ("stop" if finish_raw else None)
-    return text, finish_reason
-
-
-# API 调用健壮性常量
-GEN_MODEL_TIMEOUT = 180.0  # 与 llm_transport.DEFAULT_TIMEOUT 对齐
-GEN_MODEL_MAX_RETRIES = 3  # 同 profile 限流/超时的有限重试次数
-GEN_MODEL_RETRY_BASE_DELAY = 2.0  # 指数退避基础秒数（2,4,8）
-
-
 def _filter_creative_profiles(candidates):
     """🔴 写正文禁 flash-tier 兜底（质量攸关）。
 
@@ -2007,34 +1838,18 @@ def _filter_creative_profiles(candidates):
 
 
 def call_gen_model(loader: GenModelLoader, system: str, user: str,
-                   creative: bool = False, prior_assistant: str | None = None,
-                   cont_reason: str = "length", return_finish: bool = False) -> tuple:
-    """调当前 active profile；失败时按 fallback 链尝试。
+                   creative: bool = False, cont_reason: str = "length",
+                   return_finish: bool = False) -> tuple:
+    """调当前 active profile；失败时按 fallback 链尝试（委托 llm_transport.generate() 做统一
+    双协议分发 + 同 profile 重试 + 截断续写 + 空响应守卫，本函数只保留写作侧专属策略）。
 
     creative=True（写正文）→ 剔除 flash-tier 兜底，pro 全挂响亮失败（不静默降质 · 北极星：质量优先）。
-    prior_assistant / cont_reason：透传 _stream_once 的续写机制（保留供长输出续写场景）。
-      缺省 = 常规单发。
+    cont_reason：截断续写时的文案模式（'length'=续写正文；'changes_only'=只补 CHANGES 块）。
     return_finish=True → 返回 (full_text, used_profile, finish_reason)；
       缺省 False 返回 (full_text, used_profile)。
 
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
-
-    健壮性设计：
-      · OpenAI client 显式 timeout 防止无限挂起。
-      · RateLimitError / APITimeoutError 在**同 profile** 做有限指数退避重试（再降级 fallback），
-        避免一次 429/超时就降级到次优模型。
-      · HTTP 200 但零 content（内容过滤 / reasoning model 全进 reasoning_content / 空输出）
-        视为失败 → 切下一 profile；全链皆空才 raise（杜绝写空草稿报成功）。
     """
-    import time
-
-    from openai import OpenAI
-
-    try:
-        from openai import APITimeoutError, RateLimitError
-    except ImportError:  # 极旧 SDK 兜底（不应发生 · openai>=1.x 均有）
-        APITimeoutError = RateLimitError = ()
-
     candidates = loader.get_callable_profiles()
     if creative:
         candidates = _filter_creative_profiles(candidates)
@@ -2042,75 +1857,38 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
             raise GenModelExhaustedError(
                 [("<creative-guard>", "pro-tier 全不可用且 flash 被禁(写正文质量攸关)·"
                   "疑中转站 502/503 故障·稍后重试")])
-    failures: list[tuple[str, str]] = []
 
+    # 逐 profile 解析 max_tokens（explicit/能力缓存/16000 默认三级）后固化到副本——
+    # llm_transport.generate() 只认 profile.max_tokens 显式值，不查能力缓存；
+    # copy.copy 产生新对象，不 mutate loader 缓存的原 profile。
+    resolved = []
     for i, profile in enumerate(candidates):
         max_tokens, mt_source = resolve_max_tokens(profile)
-        if i == 0:
-            logger.info(f" 调用 active profile: {profile.name} "
-                  f"({profile.model} @ {profile.base_url})")
-            logger.info(f" max_tokens={max_tokens} (source: {mt_source})")
-            logger.info(f" temperature={profile.temperature}")
-        else:
-            logger.info(f"\n[FALLBACK] -> {profile.name} ({profile.model})")
+        tag = "active" if i == 0 else f"fallback[{i}]"
+        logger.info(f" {tag}: {profile.name} ({profile.model}) "
+                    f"max_tokens={max_tokens} (source: {mt_source}) temp={profile.temperature}")
+        p2 = copy.copy(profile)
+        p2.max_tokens = max_tokens
+        resolved.append(p2)
 
-        logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars")
+    logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars")
 
-        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url,
-                        timeout=GEN_MODEL_TIMEOUT)
-        full_text = ""
-        try:
-            # 同 profile 内：限流/超时做有限指数退避重试，其余异常立即降级 fallback
-            attempt = 0
-            while True:
-                try:
-                    full_text, finish_reason = _stream_once(
-                        client, profile, system, user, max_tokens,
-                        prior_assistant=prior_assistant, cont_reason=cont_reason)
-                    break
-                except (RateLimitError, APITimeoutError) as re_err:
-                    attempt += 1
-                    if attempt > GEN_MODEL_MAX_RETRIES:
-                        raise  # 重试耗尽 → 落到外层 except → 降级 fallback
-                    delay = GEN_MODEL_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                    logger.info(f"\n[gen_writer] ⚠️ {profile.name} 限流/超时 "
-                          f"({type(re_err).__name__})，{delay:.0f}s 后同 profile 重试 "
-                          f"{attempt}/{GEN_MODEL_MAX_RETRIES}…")
-                    time.sleep(delay)
-            # 截断检测 + 自动续写（finish_reason == "length" = 命中 max_tokens 被截断）
-            cont_rounds = 0
-            while finish_reason == "length" and cont_rounds < 3:
-                cont_rounds += 1
-                logger.info(f"\n[gen_writer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…")
-                cont_text, finish_reason = _stream_once(
-                    client, profile, system, user, max_tokens,
-                    prior_assistant=(prior_assistant or "") + full_text)
-                full_text += cont_text
-            if finish_reason == "length":
-                logger.info(f"\n[gen_writer] ⚠️ WARN 续写 {cont_rounds} 轮后仍可能未写完"
-                      f"（草稿尾部/CHANGES 块可能不完整 · 下游 cjk 偏短检查兜底）")
-        except Exception as e:
-            reason = str(e)[:200]
-            logger.info(f"\n[FALLBACK] {profile.name} 调用失败: {reason}")
-            failures.append((profile.name, reason))
-            continue  # 切下一个 profile
+    def _cont_builder(reason, rnd):
+        return _build_cont_msg(cont_reason)
 
-        # 空响应守卫：HTTP 200 但零 content（内容过滤 / reasoning model 全进 reasoning_content）
-        # 视为失败，切下个 profile（与 except 路径对齐），杜绝写空草稿报成功。
-        if not full_text.strip():
-            reason = "返回空内容（HTTP 200 但零 content · 可能内容过滤/reasoning model 全进 reasoning_content）"
-            logger.info(f"\n[FALLBACK] {profile.name} {reason}")
-            failures.append((profile.name, reason))
-            continue  # 切下一个 profile
+    try:
+        result = llm_transport.generate(
+            resolved, system, user,
+            cont_msg_builder=_cont_builder,
+            label="gen_writer",
+        )
+    except llm_transport.TransportExhausted as e:
+        raise GenModelExhaustedError(e.failures) from e
 
-        # 成功
-        logger.info(f"\n[gen_writer] 接收完毕 ({len(full_text)} chars) via {profile.name}")
-        if return_finish:
-            return full_text, profile, finish_reason
-        return full_text, profile
-
-    # 全链失败
-    raise GenModelExhaustedError(failures)
+    logger.info(f"\n[gen_writer] 接收完毕 ({len(result.text)} chars) via {result.profile.name}")
+    if return_finish:
+        return result.text, result.profile, result.finish_reason
+    return result.text, result.profile
 
 
 # ============ 长度遥测 ============

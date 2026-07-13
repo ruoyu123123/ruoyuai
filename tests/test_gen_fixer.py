@@ -1,13 +1,13 @@
-"""gen_fixer 回归测试 — 守护 2026-05-30 健壮性加固 [#3]。
+"""gen_fixer 回归测试。
 
 gen_fixer 是 writer 之外第二个 gen-model 入口，且**原地覆写整章正文**（parse_and_apply），
-截断/空响应后果比 gen_writer 写草稿更重 = 销毁已发布章节。本测试守护与 gen_writer 等价的
-四道防护 + CJK 守恒校验：
-  ① OpenAI client 显式 timeout
-  ② finish_reason 捕获 + 截断自动续写
-  ③ RateLimit/APITimeout 同 profile 指数退避重试
-  ④ 空响应守卫（切 fallback / 全空 raise）
-  ⑤ parse_and_apply CJK 守恒（整章 ±30% 超限拒绝覆写）
+截断/空响应后果比 gen_writer 写草稿更重 = 销毁已发布章节。call_gen_model 委托
+llm_transport.generate() 做统一重试/续写/双协议分发（该机制本身的测试见
+tests/test_llm_transport.py），本文件守护 wrapper 契约 + CJK 守恒校验：
+  ① finish_reason 捕获 + 截断自动续写（fixer 专属续写文案）
+  ② RateLimit 同 profile 重试
+  ③ 空响应守卫（切 fallback / 全空 raise）
+  ④ parse_and_apply CJK 守恒（整章 ±30% 超限拒绝覆写）
 """
 import sys
 import tempfile
@@ -106,25 +106,13 @@ def test_resolve_max_tokens_default_fallback():
     assert mt == 16000
 
 
-# ============ ② _stream_once finish_reason 捕获 + 续写 ============
-def test_stream_once_captures_finish_reason():
-    """核心：原 bug 是 call_gen_model 只累加 piece、从不读 finish_reason → 截断静默。"""
-    text, fr = gf._stream_once(_mock_client([("修复正文", None), ("尾", "length")]), _P(),
-                               "sys", "usr", 1000)
-    assert text == "修复正文尾"
-    assert fr == "length"
-
-
-def test_stream_once_continuation_messages():
-    """续写模式：prior_assistant 非空 → messages 含 assistant 回填 + 续写指令（提到补全块）。"""
-    cap = {}
-    gf._stream_once(_mock_client([("", "stop")], capture=cap), _P(),
-                    "sys", "usr", 1000, prior_assistant="已写修复正文")
-    msgs = cap["messages"]
-    assert len(msgs) == 4
-    assert msgs[2]["role"] == "assistant" and msgs[2]["content"] == "已写修复正文"
-    assert "截断" in msgs[3]["content"]
-    assert "===END===" in msgs[3]["content"]  # fixer 语境：必须提醒补全 FILE 块
+# ============ ① fixer 专属续写文案 + 截断自动续写 ============
+def test_fixer_cont_msg_mentions_file_end_block():
+    """fixer 续写文案必须提醒补全 ===FILE:.../===END=== 块（覆写半截会销毁已发布章节，
+    不能沿用 gen_writer 的通用「补 CHANGES 块」续写文案）。"""
+    msg = gf._fixer_cont_msg("length", 1)
+    assert "截断" in msg
+    assert "===END===" in msg
 
 
 def test_call_gen_model_auto_continues_on_length():
@@ -154,19 +142,7 @@ def test_call_gen_model_auto_continues_on_length():
     assert client.chat.completions.calls == 2  # 续写了 1 轮
 
 
-# ============ ① OpenAI client 显式 timeout ============
-def test_call_gen_model_openai_has_timeout():
-    """① OpenAI client 构造必须带显式 timeout（对齐 ai_wrapper / gen_writer 的 180.0）。"""
-    restore, captured = _patch_openai([_client_returning([("正文", "stop")])])
-    try:
-        gf.call_gen_model(_Loader([_profile("active")]), "sys", "usr")
-    finally:
-        restore()
-    assert captured, "应至少构造一次 OpenAI client"
-    assert captured[0].get("timeout") == gf.GEN_MODEL_TIMEOUT == 180.0
-
-
-# ============ ④ 空响应守卫 ============
+# ============ ② 空响应守卫 ============
 def test_call_gen_model_empty_response_switches_fallback():
     """④ 空响应不当成功 → 切 fallback（否则会拿空回复覆写整章）。"""
     empty_client = _client_returning([("", "stop")])
@@ -197,7 +173,7 @@ def test_call_gen_model_all_empty_raises():
     assert raised, "全链空响应必须 raise GenModelExhaustedError"
 
 
-# ============ ③ 限流同 profile 指数退避重试 ============
+# ============ ③ 限流同 profile 重试 ============
 class _FakeResp:
     status_code = 429
     headers = {}
@@ -247,7 +223,7 @@ def test_call_gen_model_retries_same_profile_on_ratelimit():
     assert flaky.chat.completions.calls == 3  # 抛2次 + 成功1次
 
 
-# ============ ⑤ parse_and_apply CJK 守恒校验 ============
+# ============ ④ parse_and_apply CJK 守恒校验 ============
 def _reply_with_file(rel_path, body):
     return f"===FILE: {rel_path}===\n{body}\n===END===\n```json\n{{}}\n```"
 

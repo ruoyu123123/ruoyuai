@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """gen_throttle 全局限速器测试（限速端点/中转站支持·真 e2e 暴露）。
 
-默认关=零回归 · 设 GEN_MIN_INTERVAL_S 生效 · 4 处请求点(gen_writer 2 + llm_transport 2)接线。
+默认关=零回归 · 设 GEN_MIN_INTERVAL_S 生效 · gen_writer/gen_fixer 委托 llm_transport.generate()
+发起实际请求，节流接线单一真理源收敛在 llm_transport.py 的 2 处（openai + gemini 协议路径）。
 """
 import os
 import sys
@@ -63,11 +64,14 @@ def test_throttle_invalid_env_falls_to_off():
 
 
 def test_request_points_wired():
-    """4 处 gen-model 请求点都调了 gen_throttle.wait()（gen_writer 2 + llm_transport 2）。"""
-    gw = (_ROOT / "core" / "scripts" / "gen_writer.py").read_text(encoding="utf-8")
+    """gen-model 实际请求点都调了 gen_throttle.wait()。gen_writer/gen_fixer/distill_replicate
+    的 call_gen_model 都委托 llm_transport.generate()/stream_once() 发起请求，节流单一真理源
+    收敛在 llm_transport.py 的 2 处协议路径（openai + gemini）；distill_replicate 的自定义
+    refusal-retry 循环额外直接接了 1 处。"""
     lt = (_ROOT / "core" / "scripts" / "llm_transport.py").read_text(encoding="utf-8")
-    assert gw.count("gen_throttle.wait()") >= 2, "gen_writer 未在 2 处请求点接节流"
-    assert lt.count("gen_throttle.wait()") >= 2, "llm_transport 未在 2 处请求点接节流"
+    dr = (_ROOT / "core" / "scripts" / "distill_replicate.py").read_text(encoding="utf-8")
+    assert lt.count("gen_throttle.wait()") >= 2, "llm_transport 未在 2 处协议路径接节流"
+    assert dr.count("gen_throttle.wait()") >= 1, "distill_replicate 自定义重试循环未接节流"
 
 
 if __name__ == "__main__":

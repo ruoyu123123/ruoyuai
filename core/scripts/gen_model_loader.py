@@ -18,6 +18,7 @@ gen_model_loader.py — 多 profile loader + fallback 链（gen_writer/gen_fixer
 from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
+import json
 import os
 import re
 
@@ -297,6 +298,39 @@ def reasoning_extra_body(profile) -> dict:
     if getattr(profile, "reasoning_effort", None):
         e["reasoning_effort"] = profile.reasoning_effort
     return e
+
+
+def load_model_capabilities_cache() -> dict:
+    """加载 model_probe.py 写出的能力缓存（gen_writer/gen_fixer 共用单一真理源）。"""
+    try:
+        from frozen_util import user_data_dir as _udd
+        cache_path = _udd() / '.claude' / '.model_capabilities.json'
+    except Exception:
+        cache_path = Path(__file__).parent.parent.parent / '.claude' / '.model_capabilities.json'
+    if not cache_path.exists():
+        return {}
+    try:
+        return json.loads(cache_path.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
+    """决定 max_tokens 的优先级：
+       1. profile.max_tokens 显式（最高）
+       2. 缓存的 recommended_max_tokens_for_writing
+       3. 保守默认值 16000
+       返回 (max_tokens, source)
+    """
+    if profile.max_tokens is not None:
+        return profile.max_tokens, 'profile_explicit'
+
+    cache = load_model_capabilities_cache()
+    caps = cache.get('model_capabilities', {}).get(profile.model)
+    if caps:
+        return caps.get('recommended_max_tokens_for_writing', 16000), f"cache:{caps.get('source', 'unknown')}"
+
+    return 16000, 'default_fallback_16k_NO_PROBE_YET'
 
 
 _default_loader: GenModelLoader | None = None

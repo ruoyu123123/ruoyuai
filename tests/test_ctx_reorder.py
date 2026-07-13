@@ -4,7 +4,7 @@
 1. build_prompt 在 CTX_REORDER_MODE=active（默认）时，把**第一权威风格 skill** + 语感种子锚
    重排到「现在执行润色」生成点的**近邻**（RoPE 高位），manifest 事实索引留中段；
    off/shadow 时退回原版 join 顺序（零回归）。
-2. _stream_once 截断续写回合在 active 模式下注入**精简风格锚**（签名句长/对话格式/禁套话 3 条），
+2. _build_cont_msg 截断续写回合在 active 模式下注入**精简风格锚**（签名句长/对话格式/禁套话 3 条），
    防 recency 漂移；off/shadow 时续写消息不含该锚（零回归）。
 
 lost-in-the-middle / RoPE recency 实证：context 中段注意力最弱（U 型），紧贴生成点最强。
@@ -179,48 +179,17 @@ def test_reorder_with_prev_chapter_anchor_after_prev():
 # ───────────────────── 续写风格锚测试 ─────────────────────
 
 def _capture_continuation_msg(mode: str):
-    """在指定 mode 下跑一次续写 _stream_once，返回续写那条 user 消息内容。"""
-    cap = {}
-
-    class MockChoice:
-        def __init__(s, c, fr):
-            s.delta = type("D", (), {"content": c})()
-            s.finish_reason = fr
-
-    class MockChunk:
-        def __init__(s, c, fr):
-            s.choices = [MockChoice(c, fr)]
-
-    class MockStream:
-        def __iter__(s):
-            return iter([MockChunk("续", "stop")])
-
-    class MockCompletions:
-        def create(s, **kw):
-            cap["messages"] = kw["messages"]
-            return MockStream()
-
-    class MockClient:
-        def __init__(s):
-            s.chat = type("C", (), {"completions": MockCompletions()})()
-
-    class _P:
-        max_tokens = None
-        model = "m"
-        temperature = 0.8
-        name = "mock"
-
+    """在指定 mode 下取一次 _build_cont_msg 续写文案（llm_transport.generate 通过
+    call_gen_model 的 cont_msg_builder 回调间接消费·直接测该纯函数更精确）。"""
     prev = os.environ.get("CTX_REORDER_MODE")
     os.environ["CTX_REORDER_MODE"] = mode
     try:
-        gw._stream_once(MockClient(), _P(), "sys", "usr", 1000, prior_assistant="已写正文")
+        return gw._build_cont_msg("length")
     finally:
         if prev is None:
             os.environ.pop("CTX_REORDER_MODE", None)
         else:
             os.environ["CTX_REORDER_MODE"] = prev
-    # 续写那条 user 是 messages[3]
-    return cap["messages"][3]["content"]
 
 
 def test_continuation_active_injects_style_anchor():

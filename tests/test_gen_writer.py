@@ -1,4 +1,5 @@
-"""gen_writer 回归测试 — 截断检测（_stream_once 捕获 finish_reason）等 writer 侧确定性行为守护。"""
+"""gen_writer 回归测试 — call_gen_model 委托 llm_transport 后的 writer 侧确定性行为守护
+（重试/续写/截断机制本身的测试见 tests/test_llm_transport.py）。"""
 import sys
 from pathlib import Path
 
@@ -93,26 +94,7 @@ def _mock_client(chunks_spec, capture=None):
     return MockClient()
 
 
-def test_stream_once_captures_finish_reason():
-    """核心：finish_reason 必须被读取（否则截断静默）。验证 length 被捕获。"""
-    text, fr = gw._stream_once(_mock_client([("正文", None), ("尾", "length")]), _P(),
-                               "sys", "usr", 1000)
-    assert text == "正文尾"
-    assert fr == "length"
-
-
-def test_stream_once_continuation_messages():
-    """续写模式：prior_assistant 非空 → messages 含 assistant 回填 + 续写指令。"""
-    cap = {}
-    gw._stream_once(_mock_client([("", "stop")], capture=cap), _P(),
-                    "sys", "usr", 1000, prior_assistant="已写正文")
-    msgs = cap["messages"]
-    assert len(msgs) == 4
-    assert msgs[2]["role"] == "assistant" and msgs[2]["content"] == "已写正文"
-    assert "截断" in msgs[3]["content"]
-
-
-# ============ 健壮性回归（空响应/超时/限流） ============
+# ============ 健壮性回归（空响应/限流·委托 llm_transport 后的 wrapper 契约） ============
 import json
 import tempfile
 
@@ -160,17 +142,6 @@ def _client_returning(chunks_spec):
     return _mock_client(chunks_spec)
 
 
-def _client_raising(exc):
-    """构造一个 _stream_once 调用即抛 exc 的 mock client。"""
-    class Completions:
-        def create(s, **kw):
-            raise exc
-    class Client:
-        def __init__(s):
-            s.chat = type("C", (), {"completions": Completions()})()
-    return Client()
-
-
 def test_call_gen_model_empty_response_switches_fallback():
     """空响应回归：active profile 返回零 content → 切 fallback，不当成功。"""
     p_active = _profile("active")
@@ -205,26 +176,15 @@ def test_call_gen_model_all_empty_raises():
     assert raised, "全链空响应必须 raise GenModelExhaustedError"
 
 
-def test_call_gen_model_openai_has_timeout():
-    """OpenAI client 构造必须带显式 timeout（对齐 ai_wrapper 的 180.0）。"""
-    p = _profile("active")
-    restore, captured = _patch_openai([_client_returning([("正文", "stop")])])
-    try:
-        gw.call_gen_model(_Loader([p]), "sys", "usr")
-    finally:
-        restore()
-    assert captured, "应至少构造一次 OpenAI client"
-    assert captured[0].get("timeout") == gw.GEN_MODEL_TIMEOUT == 180.0
-
-
 def test_call_gen_model_retries_same_profile_on_ratelimit():
-    """限流在同 profile 做有限重试（不一次就降级 fallback）。"""
+    """限流在同 profile 做有限重试（不一次就降级 fallback），且同 profile 复用同一 client
+    （llm_transport.generate 每 profile 建一次 client · 不因重试轮次反复重建）。"""
     from openai import RateLimitError
 
     p_active = _profile("active")
     p_fb = _profile("fallback")
 
-    # 构造一个先抛两次 RateLimitError、第三次成功的 client（模拟 _stream_once 内部重试）
+    # 构造一个先抛两次 RateLimitError、第三次成功的 client（模拟同 profile 内部重试）
     class FlakyCompletions:
         def __init__(s):
             s.calls = 0

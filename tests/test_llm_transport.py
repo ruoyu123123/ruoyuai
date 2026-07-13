@@ -5,6 +5,7 @@
 空响应守卫 / parse_json_loose 三级抽取 / gemini thinkingConfig 注入 / finish 归一。
 """
 import sys
+import time
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -290,3 +291,106 @@ def test_auth_403_not_retried():
         assert False, "应抛 TransportExhausted"
     except lt.TransportExhausted:
         assert calls["n"] == 1, f"403 不应重试（调用 {calls['n']} 次）"
+
+
+# ============ 真实 openai SDK 路径（client 构造·gen_writer/gen_fixer 迁移后唯一覆盖点） ============
+def _patch_openai_factory(mock_clients):
+    """把 openai.OpenAI 换成按构造顺序产出 mock client 的桩，返回 (restore_fn, captured_kwargs)。"""
+    import openai
+    captured = []
+    seq = list(mock_clients)
+
+    def fake_openai(**kwargs):
+        captured.append(kwargs)
+        return seq[len(captured) - 1]
+
+    orig = openai.OpenAI
+    openai.OpenAI = fake_openai
+    return (lambda: setattr(openai, "OpenAI", orig)), captured
+
+
+def _mock_openai_client(chunks_spec):
+    """chunks_spec: [(content, finish_reason), ...] · 单次 create() 消费。"""
+    class MockChoice:
+        def __init__(s, c, fr):
+            s.delta = type("D", (), {"content": c})()
+            s.finish_reason = fr
+
+    class MockChunk:
+        def __init__(s, c, fr):
+            s.choices = [MockChoice(c, fr)]
+            s.usage = None
+
+    class MockCompletions:
+        def create(s, **kw):
+            return iter([MockChunk(c, fr) for c, fr in chunks_spec])
+
+    class MockClient:
+        def __init__(s):
+            s.chat = type("C", (), {"completions": MockCompletions()})()
+    return MockClient()
+
+
+def test_stream_once_openai_constructs_client_with_explicit_timeout():
+    """_stream_once_openai 在 client=None 时必须显式传 timeout（防止无限挂起）。"""
+    restore, captured = _patch_openai_factory([_mock_openai_client([("正文", "stop")])])
+    try:
+        text, finish = lt.stream_once(_profile(), "sys", "usr", 1000)
+    finally:
+        restore()
+    assert text == "正文" and finish == "stop"
+    assert captured, "应至少构造一次 OpenAI client"
+    assert captured[0].get("timeout") == lt.DEFAULT_TIMEOUT == 180.0
+
+
+def test_generate_reuses_same_client_across_retry_and_continuation():
+    """generate() 对同一 profile 的重试轮 + 续写轮必须复用同一个 OpenAI client
+    （不因每次调用重建·省重复握手·对齐迁移前 gen_writer/gen_fixer 语义）。"""
+    from openai import RateLimitError
+
+    class _FakeResp:
+        status_code = 429
+        headers = {}
+        request = None
+
+    class FlakyCompletions:
+        def __init__(s):
+            s.calls = 0
+
+        def create(s, **kw):
+            s.calls += 1
+            if s.calls == 1:
+                raise RateLimitError("rate limited", response=_FakeResp(), body=None)
+            if s.calls == 2:
+                class Choice:
+                    delta = type("D", (), {"content": "前半"})()
+                    finish_reason = "length"
+                class Chunk:
+                    choices = [Choice()]
+                    usage = None
+                return iter([Chunk()])
+            class Choice2:
+                delta = type("D", (), {"content": "后半"})()
+                finish_reason = "stop"
+            class Chunk2:
+                choices = [Choice2()]
+                usage = None
+            return iter([Chunk2()])
+
+    class FlakyClient:
+        def __init__(s):
+            s.chat = type("C", (), {"completions": FlakyCompletions()})()
+
+    flaky = FlakyClient()
+    restore, captured = _patch_openai_factory([flaky])
+    orig_sleep = time.sleep
+    time.sleep = lambda *a, **k: None
+    try:
+        r = lt.generate([_profile()], "sys", "usr",
+                        retry=lt.RetryPolicy(max_retries=2, base_delay=0.001))
+    finally:
+        time.sleep = orig_sleep
+        restore()
+    assert r.text == "前半后半"
+    assert len(captured) == 1, f"同 profile 3 次调用应只构造 1 次 client（实际 {len(captured)} 次）"
+    assert flaky.chat.completions.calls == 3  # 1次限流 + 1次截断 + 1次成功

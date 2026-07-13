@@ -45,6 +45,7 @@ checker 输出的违规精修。正文问题必须回到 cluster 草稿层修复
 """
 from __future__ import annotations
 import argparse
+import copy
 import json
 import os
 import re
@@ -62,7 +63,9 @@ from gen_model_loader import (  # noqa: E402
     GenModelExhaustedError,
     Profile,
     reasoning_extra_body,
+    resolve_max_tokens,
 )
+import llm_transport  # noqa: E402 · 统一 transport 层（重试/续写/双协议分发单一真理源）
 import chapter_io as cio  # noqa: E402 · CJK 计数权威口径（统一覆盖扩展 CJK）
 from log_util import get_logger  # noqa: E402
 
@@ -85,29 +88,7 @@ def check_deps():
         sys.exit(2)
 
 
-# ============ Max tokens 解析（共享 gen_writer 风格） ============
-def load_model_capabilities_cache() -> dict:
-    try:
-        from frozen_util import user_data_dir as _udd
-        cache_path = _udd() / '.claude' / '.model_capabilities.json'
-    except Exception:
-        cache_path = Path(__file__).parent.parent.parent / '.claude' / '.model_capabilities.json'
-    if not cache_path.exists():
-        return {}
-    try:
-        return json.loads(cache_path.read_text(encoding='utf-8'))
-    except Exception:
-        return {}
-
-
-def resolve_max_tokens(profile: Profile) -> tuple[int, str]:
-    if profile.max_tokens is not None:
-        return profile.max_tokens, 'profile_explicit'
-    cache = load_model_capabilities_cache()
-    caps = cache.get('model_capabilities', {}).get(profile.model)
-    if caps:
-        return caps.get('recommended_max_tokens_for_writing', 16000), f"cache:{caps.get('source','?')}"
-    return 16000, 'default_fallback_16k'
+# resolve_max_tokens 单一真理源见 gen_model_loader.py（gen_writer/gen_fixer 共用）
 
 
 # ============ 通用修复约束（所有 mode 共享） ============
@@ -372,140 +353,51 @@ novel-voice-checker agent 已审查所有对话，定位 voice 漂移 / tone 不
     return system, user
 
 
-# ============ Gen-Model 调用（含 fallback 链） ============
-# API 调用健壮性常量（与 gen_writer 同名常量对齐）
-GEN_MODEL_TIMEOUT = 180.0  # 与 gen_writer.GEN_MODEL_TIMEOUT 对齐
-GEN_MODEL_MAX_RETRIES = 3  # 同 profile 限流/超时的有限重试次数
-GEN_MODEL_RETRY_BASE_DELAY = 2.0  # 指数退避基础秒数（2,4,8）
-
-
-def _stream_once(client, profile, system: str, user: str, max_tokens: int,
-                 prior_assistant: str | None = None) -> tuple[str, "str | None"]:
-    """单次 stream 生成，返回 (text, finish_reason)。
-
-    捕获 finish_reason（对齐 gen_writer._stream_once）：命中 max_tokens 的截断若不识别，
-    截断后的半截正文会直接覆写整章 = 销毁已发布章节，比 gen_writer 半截入库后果更重。
-    prior_assistant 非空 → 续写模式（修复语境：把已生成的修复正文回填，要求接着写不重复
-    且务必补全被截断的 ===FILE: ... ===END=== 块 + 收尾 JSON 块）。
-    """
-    messages = [{"role": "system", "content": system},
-                {"role": "user", "content": user}]
-    if prior_assistant:
-        messages.append({"role": "assistant", "content": prior_assistant})
-        messages.append({"role": "user",
-                         "content": "上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
-                                    "不要重复已经写过的内容、不要重新开头，直接续写后续正文，"
-                                    "务必补全被截断的 ===FILE: ... === / ===END=== 块和结尾的 "
-                                    "```json``` 总结块（缺了下游无法解析就写不出修复文件）。"})
-    _xb = reasoning_extra_body(profile)  # reasoning 控制·防 thinking 暴走(elysiver/pie-xian)
-    stream = client.chat.completions.create(
-        model=profile.model, messages=messages, max_tokens=max_tokens,
-        temperature=profile.temperature, stream=True,
-        **({"extra_body": _xb} if _xb else {}),
-    )
-    text = ""
-    finish_reason = None
-    for chunk in stream:
-        if not chunk.choices:
-            continue
-        choice = chunk.choices[0]
-        piece = getattr(choice.delta, 'content', None)
-        if piece:
-            text += piece
-            sys.stderr.write(piece)
-            sys.stderr.flush()
-        if getattr(choice, 'finish_reason', None):
-            finish_reason = choice.finish_reason
-    return text, finish_reason
+# ============ Gen-Model 调用（委托 llm_transport.generate() 做统一重试/续写/双协议分发） ============
+def _fixer_cont_msg(reason: str, round_: int) -> str:
+    """fixer 专属续写文案：修复语境须提醒补全 ===FILE:.../===END=== 块（覆写半截会销毁已发布章节，
+    比 gen_writer 写草稿后果更重·不能沿用 gen_writer 的通用续写文案）。"""
+    return ("上一条回复因长度上限被截断了。请接着上文最后一个字继续往下写，"
+            "不要重复已经写过的内容、不要重新开头，直接续写后续正文，"
+            "务必补全被截断的 ===FILE: ... === / ===END=== 块和结尾的 "
+            "```json``` 总结块（缺了下游无法解析就写不出修复文件）。")
 
 
 def call_gen_model(loader: GenModelLoader, system: str, user: str) -> tuple[str, Profile]:
-    """调当前 active profile；失败时按 fallback 链尝试。
+    """调当前 active profile；失败时按 fallback 链尝试（委托 llm_transport.generate()）。
 
     返回 (full_text, used_profile)。
     抛 GenModelExhaustedError（active + 整条 fallback 链全失败）。
 
-    gen_fixer 会**原地覆写整章正文**，截断/空响应后果比 gen_writer 写草稿更重，防护对齐
-    gen_writer.call_gen_model：
-      · OpenAI client 显式 timeout（对齐 gen_writer）防止无限挂起。
-      · RateLimitError / APITimeoutError 在**同 profile** 做有限指数退避重试（再降级 fallback），
-        避免一次 429/超时就降级到次优模型。
-      · finish_reason == "length"（命中 max_tokens 被截断）自动续写，避免半截正文覆写整章。
-      · HTTP 200 但零 content（内容过滤 / reasoning model 全进 reasoning_content / 空输出）
-        视为失败 → 切下一 profile；全链皆空才 raise（杜绝拿空回复去覆写已发布章节）。
+    gen_fixer 会**原地覆写整章正文**，截断/空响应后果比 gen_writer 写草稿更重——沿用同一套
+    transport 层防护（同 profile 限流/超时重试 · 截断自动续写 · 空响应守卫），只有续写文案
+    是 fixer 专属（提醒补全 ===FILE:.../===END=== 块）。
     """
-    import time
-
-    from openai import OpenAI
-
-    try:
-        from openai import APITimeoutError, RateLimitError
-    except ImportError:  # 极旧 SDK 兜底（不应发生 · openai>=1.x 均有）
-        APITimeoutError = RateLimitError = ()
-
     candidates = loader.get_callable_profiles()
-    failures: list[tuple[str, str]] = []
 
+    resolved = []
     for i, profile in enumerate(candidates):
         max_tokens, mt_source = resolve_max_tokens(profile)
-        if i == 0:
-            logger.info(f" 调用 active profile: {profile.name} "
-                  f"({profile.model} @ {profile.base_url})")
-            logger.info(f" max_tokens={max_tokens} (source: {mt_source})")
-            logger.info(f" temperature={profile.temperature}")
-        else:
-            logger.info(f"\n[FALLBACK] -> {profile.name} ({profile.model})")
+        tag = "active" if i == 0 else f"fallback[{i}]"
+        logger.info(f" {tag}: {profile.name} ({profile.model}) "
+                    f"max_tokens={max_tokens} (source: {mt_source}) temp={profile.temperature}")
+        p2 = copy.copy(profile)
+        p2.max_tokens = max_tokens
+        resolved.append(p2)
 
-        logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars")
+    logger.info(f" prompt size: system={len(system)} chars, user={len(user)} chars")
 
-        client = OpenAI(api_key=profile.api_key, base_url=profile.base_url,
-                        timeout=GEN_MODEL_TIMEOUT)
-        full_text = ""
-        try:
-            # 同 profile 内：限流/超时做有限指数退避重试，其余异常立即降级 fallback
-            attempt = 0
-            while True:
-                try:
-                    full_text, finish_reason = _stream_once(client, profile, system, user, max_tokens)
-                    break
-                except (RateLimitError, APITimeoutError) as re_err:
-                    attempt += 1
-                    if attempt > GEN_MODEL_MAX_RETRIES:
-                        raise  # 重试耗尽 → 落到外层 except → 降级 fallback
-                    delay = GEN_MODEL_RETRY_BASE_DELAY * (2 ** (attempt - 1))
-                    logger.info(f"\n[gen_fixer] ⚠️ {profile.name} 限流/超时 "
-                          f"({type(re_err).__name__})，{delay:.0f}s 后同 profile 重试 "
-                          f"{attempt}/{GEN_MODEL_MAX_RETRIES}…")
-                    time.sleep(delay)
-            # 截断检测 + 自动续写（finish_reason == "length" = 命中 max_tokens 被截断）
-            cont_rounds = 0
-            while finish_reason == "length" and cont_rounds < 3:
-                cont_rounds += 1
-                logger.info(f"\n[gen_fixer] ⚠️ 输出截断(finish_reason=length)，自动续写第 {cont_rounds}/3 轮…")
-                cont_text, finish_reason = _stream_once(
-                    client, profile, system, user, max_tokens, prior_assistant=full_text)
-                full_text += cont_text
-            if finish_reason == "length":
-                logger.info(f"\n[gen_fixer] ⚠️ WARN 续写 {cont_rounds} 轮后仍可能未写完"
-                      f"（修复块/JSON 块可能不完整 · 下游 CJK 守恒校验兜底）")
-        except Exception as e:
-            reason = str(e)[:200]
-            logger.info(f"\n[FALLBACK] {profile.name} 调用失败: {reason}")
-            failures.append((profile.name, reason))
-            continue  # 切下一个 profile
+    try:
+        result = llm_transport.generate(
+            resolved, system, user,
+            cont_msg_builder=_fixer_cont_msg,
+            label="gen_fixer",
+        )
+    except llm_transport.TransportExhausted as e:
+        raise GenModelExhaustedError(e.failures) from e
 
-        # 空响应守卫：HTTP 200 但零 content（内容过滤 / reasoning model 全进 reasoning_content）
-        # 视为失败，切下个 profile（与 except 路径对齐），杜绝拿空回复覆写已发布章节。
-        if not full_text.strip():
-            reason = "返回空内容（HTTP 200 但零 content · 可能内容过滤/reasoning model 全进 reasoning_content）"
-            logger.info(f"\n[FALLBACK] {profile.name} {reason}")
-            failures.append((profile.name, reason))
-            continue  # 切下一个 profile
-
-        logger.info(f"\n[gen_fixer] 接收完毕 ({len(full_text)} chars) via {profile.name}")
-        return full_text, profile
-
-    raise GenModelExhaustedError(failures)
+    logger.info(f"\n[gen_fixer] 接收完毕 ({len(result.text)} chars) via {result.profile.name}")
+    return result.text, result.profile
 
 
 # ============ 输出解析 + 应用 ============

@@ -44,7 +44,7 @@ except Exception:
         import re as _r
         return _r.sub(r"(key=)[^&\s]+", r"\1***", str(s))
 
-# 与 gen_writer.GEN_MODEL_TIMEOUT 对齐
+# 全仓 gen-model 调用超时单一真理源（gen_writer/gen_fixer/distill_replicate 均委托本层）
 DEFAULT_TIMEOUT = 180.0
 CONNECT_TIMEOUT = 15.0
 
@@ -257,8 +257,7 @@ def stream_once(profile: Profile, system: str, user: str, max_tokens: int, *,
                 client=None) -> tuple[str, str | None]:
     """单次 stream 生成 → (text, finish_reason 归一到 openai 口径)。
 
-    所有失败抛 Transport* 异常（双协议归一）——这是与 gen_writer._stream_once 的关键差异，
-    gemini path 的 429/timeout 也能进上层同 profile 重试。
+    所有失败抛 Transport* 异常（双协议归一），gemini path 的 429/timeout 也能进上层同 profile 重试。
     response_format_json：openai path 加 response_format=json_object（provider 不支持
     自动退回）；gemini path 加 responseMimeType=application/json 软约束（不上 responseSchema·
     reasoning 模型强 schema 集体失败实证）。
@@ -595,6 +594,15 @@ def generate(loader_or_profiles, system: str, user: str, *,
         if fb_index:
             print(f"\n{tag} [FALLBACK] -> {profile.name} ({profile.model})", file=sys.stderr)
 
+        # openai 协议下同 profile 的重试/续写轮复用同一 client（省重复握手·对齐旧
+        # gen_writer/gen_fixer 语义）；gemini 协议自建 httpx client 不需要；_stream_fn
+        # 测试注入（签名无 client 形参）不传，sfn is stream_once 时才生效。
+        _client_kw = {}
+        if sfn is stream_once and getattr(profile, "protocol", "openai") != "gemini":
+            from openai import OpenAI as _OpenAI
+            _client_kw["client"] = _OpenAI(api_key=profile.api_key, base_url=profile.base_url,
+                                           timeout=DEFAULT_TIMEOUT)
+
         retries_used = 0
         try:
             # —— 同 profile 重试圈 ——
@@ -608,7 +616,7 @@ def generate(loader_or_profiles, system: str, user: str, *,
                                        prior_assistant=None, cont_msg=None,
                                        temperature=temperature,
                                        response_format_json=response_format_json,
-                                       echo=echo)
+                                       echo=echo, **_client_kw)
                     break
                 except TransportEmpty:
                     raise                          # 空响应非瞬时 → 直接降级
@@ -640,7 +648,7 @@ def generate(loader_or_profiles, system: str, user: str, *,
                                         prior_assistant=text, cont_msg=cmsg,
                                         temperature=temperature,
                                         response_format_json=response_format_json,
-                                        echo=echo)
+                                        echo=echo, **_client_kw)
                 text += cont_text
             if finish == "length":
                 print(f"\n{tag} WARN 续写 {cont_rounds} 轮后仍截断（尾部可能不完整）")
