@@ -188,8 +188,11 @@ def _strip_markdown_fence(text: str) -> str:
 
     Gemini 经 elysia 中转输出 JSON 时偶尔用 markdown 围栏 ```json ... ``` 包裹，
     下游 json.loads 直接吃会炸；Claude Code Agent 输出裸 JSON 不受影响。
-    本函数在 transport 层 post-process 剥外壳·收敛到 stream_once 单一真理源·避免
-    av_judge._extract_json / optimizer._extract_patches / gen_fixer 等下游各自剥离。
+    本函数在 transport 层 post-process 剥外壳·是 response_format_json=True 请求（纯 JSON
+    协议）的单一真理源。**边界**：不覆盖 response_format_json=False 的混排输出——
+    gen_writer/gen_fixer 从「正文 + ```json``` CHANGES 块」里抽 JSON、av_judge 从 agent
+    产出文件里抽 JSON（av_judge 零 gen-model 调用），这些 context-specific 抽取器各自保留，
+    与本函数职责不重叠（不要据本函数的存在删掉它们）。
 
     语义（保守）：
       - text strip 后『以 ``` 起首』+ 匹配到围栏 → 返回围栏内层（多围栏取第一个）
