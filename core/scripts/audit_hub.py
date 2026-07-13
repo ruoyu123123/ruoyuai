@@ -3118,6 +3118,59 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  lambda out, code: _parse_violations_scanner(
                      out, "spatial_continuity_scanner",
                      "SPATIAL_CONTINUITY_TELEPORT", "结构")),
+                # [R19 W8 Batch-W·P1·Miall-Kuiken 30 年实证] foregrounding 三维密度
+                # （phonetic/grammatical/semantic per-1k-CJK）· FTDI=z(p)+z(g)+z(s) ·
+                # 作者档 quantitative.foregrounding_triad 分位数第一权威 ·
+                # FOREGROUNDING_TRIAD_DENSITY_MODE 默认 shadow · advisory（绝不 hard_gate）
+                ("foregrounding_triad_density",
+                 [child_python(), str(_SCRIPT_DIR / "foregrounding_triad_density_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "foregrounding_triad_density_scanner",
+                     "FOREGROUNDING_TRIAD_DENSITY_OFF_BAND", "风格")),
+                # [R19 W8 Batch-W·P1·PAN 2025 SSPC + Better Call Claude] 句对级风格断点
+                # 定位·滑窗 8 句·邻接对 score≥1.5 报 anchor·gen_fixer 接收 style_break_anchors[]·
+                # INTRA_CLUSTER_STYLE_BREAK_MODE 默认 shadow · advisory（绝不 hard_gate）
+                ("intra_cluster_style_break",
+                 [child_python(), str(_SCRIPT_DIR / "intra_cluster_style_break_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "intra_cluster_style_break_scanner",
+                     "STYLE_BREAK_DETECTED", "风格")),
+                # [R23 W11 Batch-GG·P1·脂砚斋《红楼梦评》獭尾法] 高潮后残波长尾
+                # （张力衰减+目标偏移+未来锚点三特征联检）· 与作者档 author_pacing_style
+                # （悠长余韵/强爽点）比对 · OTTER_TAIL_MODE 默认 shadow ·
+                # advisory（作者档第一权威·绝不 hard_gate）
+                ("otter_tail",
+                 [child_python(), str(_SCRIPT_DIR / "otter_tail_scanner.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_multi_code_violations_scanner(
+                     out, "otter_tail_scanner", "OTTER_TAIL_DETECTED", "节奏")),
+                # [R23 W11 Batch-GG·P0·neural PACE 框架] 钩子（章末强情绪 beat）两侧
+                # ±300 CJK 长记 window · anchor 命中密度 vs 章中段 baseline ·
+                # 纯节奏型钩子豁免 · PACE_CARRIER_WINDOW_MODE 默认 shadow ·
+                # advisory（绝不 hard_gate）
+                ("pace_callback_density",
+                 [child_python(), str(_SCRIPT_DIR / "pace_callback_density.py"),
+                  str(cluster_draft), "--project", str(project_root)],
+                 {0, 1},
+                 lambda out, code: _parse_multi_code_violations_scanner(
+                     out, "pace_callback_density", "PACE_CARRIER_WINDOW_EMPTY", "节奏")),
+                # [事件 P0·2026-06-29·South Park But-Therefore 法则] 扫 scene_storyboard
+                # 相邻 beat 的 link_to_prev∈{but|therefore|and_then}·命中 and_then 平铺
+                # （流水账）或已标注却缺 but/therefore 衔接 → WEAK_CAUSAL_LINK ·
+                # input=事件簇.json 非草稿文本（无位置参数）· CAUSAL_CONNECTOR_MODE 默认 shadow ·
+                # advisory（只查是否平铺·绝不卡 but/therefore 比例·绝不 hard_gate）
+                ("causal_connector",
+                 [child_python(), str(_SCRIPT_DIR / "causal_connector_scanner.py"),
+                  "--project", str(project_root), "--cluster", cluster_id_full],
+                 {0, 1},
+                 lambda out, code: _parse_violations_scanner(
+                     out, "causal_connector_scanner",
+                     "WEAK_CAUSAL_LINK", "剧情")),
             ])
             # 当前 cluster 的通用顾问任务与题材专属任务共用同一调度列表。
             # LitRPG 若已由题材包路由，本地适用题材门控不再重复追加。

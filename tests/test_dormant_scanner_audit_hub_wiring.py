@@ -44,6 +44,20 @@ _WIRED = [
      "AMBIGUOUS_FLAT_TRAJECTORY", ["AMBIGUOUS_FLAT_TRAJECTORY"]),
     ("check_acr_frustration_consistency", "check_acr_frustration_consistency.py",
      "ACR_FRUSTRATION_MISMATCH", ["ACR_FRUSTRATION_MISMATCH"]),
+    # 2026-07-13 第二批休眠 scanner 接线（同病史·registry+测试俱全但从未被 audit_hub 调度）
+    ("foregrounding_triad_density_scanner", "foregrounding_triad_density_scanner.py",
+     "FOREGROUNDING_TRIAD_DENSITY_OFF_BAND", ["FOREGROUNDING_TRIAD_DENSITY_OFF_BAND"]),
+    ("intra_cluster_style_break_scanner", "intra_cluster_style_break_scanner.py",
+     "STYLE_BREAK_DETECTED", ["STYLE_BREAK_DETECTED"]),
+    ("otter_tail", "otter_tail_scanner.py",
+     "OTTER_TAIL_DETECTED",
+     ["OTTER_TAIL_DETECTED", "OTTER_TAIL_MISSING", "OTTER_TAIL_INCOMPATIBLE"]),
+    ("pace_callback_density", "pace_callback_density.py",
+     "PACE_CARRIER_WINDOW_EMPTY",
+     ["PACE_CARRIER_WINDOW_EMPTY", "PACE_CARRIER_WINDOW_OVER_LOADED",
+      "PACE_CARRIER_PURE_RHYTHM_HOOK"]),
+    ("causal_connector_scanner", "causal_connector_scanner.py",
+     "WEAK_CAUSAL_LINK", ["WEAK_CAUSAL_LINK"]),
 ]
 
 
