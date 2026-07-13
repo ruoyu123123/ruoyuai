@@ -45,6 +45,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_lookup as cl  # noqa: E402 · 章号⇄cluster_id 唯一权威反查（北极星①·禁 endswith 模糊匹配）
+
 ISSUE_CODE_NOT_DELIVERED = "BURST_TYPE_NOT_DELIVERED"
 ISSUE_CODE_MISMATCH = "BURST_TYPE_MISMATCH"
 ISSUE_CODE_NO_INTENT = "BURST_TYPE_NO_INTENT"
@@ -198,11 +201,12 @@ def _resolve_intended(project_root, cluster_key: str | None, cli_intended: str |
             return None
         data = json.loads(ec_path.read_text(encoding="utf-8"))
         clusters = data.get("clusters", []) or []
+        target = cl.normalize_cluster_id(cluster_key)
         for c in clusters:
             if not isinstance(c, dict):
                 continue
             cid = c.get("cluster_id", "")
-            if cid.endswith(cluster_key) or cid == cluster_key:
+            if target and cl.normalize_cluster_id(cid) == target:  # 归一精确比对·禁 endswith 模糊
                 t = c.get("intended_burst_type")
                 if isinstance(t, str) and t.strip():
                     return t.strip().lower()

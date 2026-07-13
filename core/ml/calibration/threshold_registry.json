@@ -127,7 +127,7 @@
         "tests/test_cluster_burst_type_predictor.py"
       ],
       "marker_lines": [
-        101
+        104
       ],
       "note": "调用处硬编码 floor=0.5（zero_shot_prototype.classify 的默认参数，非本文件具名常量，见总报告 zero_shot floor=0.5 盲区）。"
     },

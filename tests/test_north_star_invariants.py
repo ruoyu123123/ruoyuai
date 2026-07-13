@@ -41,6 +41,9 @@ def _read(p: Path) -> str:
 # f"cluster_{cluster_id:03d}" / f"cluster_{next_num:03d}" / f"cluster_{i+1:03d}" 等
 # 是合法的「cluster 号 → id 格式化」，不在禁列——只禁 ch（章号）当 cluster 号。
 _ANTIPATTERN = re.compile(r"""f(['"])cluster_\{ch:03d\}\1""")
+# cluster_id 模糊 endswith 匹配（cluster_012.endswith("2") 误命中错块 → 违北极星①单一权威反查）。
+_CLUSTER_ENDSWITH_ANTIPATTERN = re.compile(
+    r"\.endswith\(\s*(?:str\(\s*)?(?:cluster_(?:id|key|ref)|cid)\b")
 # 描述禁令的 doc/注释行只用于说明反模式，不算真实使用。
 _BAN_DOC_MARKERS = ("禁", "取代", "旧残留", "机械拼接", "反查", "章号拼接", "消灭")
 def _real_antipattern_files() -> dict:
@@ -72,6 +75,22 @@ def test_no_mechanical_chapter_to_cluster_construction():
         "发现未授权 ch→cluster 机械拼接 f\"cluster_{ch:03d}\"（违北极星①）：\n"
         + "\n".join(f"  {f}: {o}" for f, o in offenders.items())
         + "\n应改用 cluster_lookup.ch_to_cluster_id 反查。")
+
+
+def test_no_fuzzy_cluster_id_endswith_matching():
+    """北极星①：禁用 `.endswith(cluster_id/cluster_key/cid)` 模糊匹配判 cluster 身份——
+    `"cluster_012".endswith("2")` 会误命中错块（2026-07-13 dup 审计揪出 3 处·根治+回归锁）。
+    必须走 cluster_lookup.normalize_cluster_id 归一后精确比对。"""
+    offenders: dict = {}
+    for py in sorted(_SCRIPTS.glob("*.py")):
+        for i, line in enumerate(_read(py).splitlines(), 1):
+            code_part = line.split("#", 1)[0]              # 去掉行内 # 注释
+            if _CLUSTER_ENDSWITH_ANTIPATTERN.search(code_part):
+                offenders.setdefault(py.name, []).append((i, line.strip()))
+    assert not offenders, (
+        "发现 cluster_id 模糊 endswith 匹配（违北极星①·会误命中错块）：\n"
+        + "\n".join(f"  {f}: {o}" for f, o in offenders.items())
+        + "\n应改用 cluster_lookup.normalize_cluster_id 归一后精确比对。")
 
 
 # ============ ② chapter_splitter 不依赖质检模块（北极星④章节仅格式） ============

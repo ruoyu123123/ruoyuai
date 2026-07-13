@@ -39,6 +39,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_lookup as cl  # noqa: E402 · 章号⇄cluster_id 唯一权威反查（北极星①·禁 endswith 模糊匹配）
+
 ISSUE_CODE_MISMATCH = "AUTHOR_SIGNATURE_MISMATCH"
 ISSUE_CODE_NOT_PLACED = "AUTHOR_SIGNATURE_NOT_PLACED"
 ISSUE_CODE_OK = "AUTHOR_SIGNATURE_OK"
@@ -205,11 +208,12 @@ def _load_slots(project_root, cluster_key: str) -> list[dict]:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
+    target = cl.normalize_cluster_id(cluster_key)
     for c in data.get("clusters", []) or []:
         if not isinstance(c, dict):
             continue
         cid = c.get("cluster_id", "")
-        if cid.endswith(cluster_key) or cid == cluster_key:
+        if target and cl.normalize_cluster_id(cid) == target:  # 归一精确比对·禁 endswith 模糊
             slots = []
             # storyboard 级 slot
             for sb in c.get("scene_storyboard", []) or []:

@@ -36,6 +36,9 @@ import os
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_lookup as cl  # noqa: E402 · 章号⇄cluster_id 唯一权威反查（北极星①·禁 endswith 模糊匹配）
+
 ISSUE_CODE = "WEAK_CAUSAL_LINK"
 
 _VALID_SCENE_TYPES = {"proactive_scene", "reactive_sequel"}
@@ -143,12 +146,12 @@ def analyze_storyboard(storyboard: list) -> dict:
 
 def _iter_clusters(project_root, cluster_id=None):
     data = _load_json(Path(project_root) / "_数据库" / "事件簇.json", {}) or {}
+    target = cl.normalize_cluster_id(cluster_id) if cluster_id else None
     for c in data.get("clusters", []) or []:
         if not isinstance(c, dict):
             continue
         cid = c.get("cluster_id") or ""
-        if cluster_id and not (cid == cluster_id or cid.endswith(str(cluster_id))
-                               or str(cluster_id).endswith(cid)):
+        if target and cl.normalize_cluster_id(cid) != target:  # 归一精确比对·禁 endswith 模糊
             continue
         yield cid, c
 

@@ -31,6 +31,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_lookup as cl  # noqa: E402 · 章号⇄cluster_id 唯一权威反查（北极星①·禁字符串后缀判 cluster 身份）
+
 ISSUE_CODE = "XIEZI_KERNEL_NOT_RECALLED"
 ISSUE_CODE_HOMOLOGY = "XIEZI_HOMOLOGY_THIN"
 
@@ -162,8 +165,7 @@ def scan(draft_path, project_root=None, manifest_path=None) -> dict:
     manifest = _load_manifest(manifest_path)
     cluster_id = (manifest or {}).get("cluster_id", "") or ""
     is_first = (manifest or {}).get("cluster_index") == 1 or \
-        cluster_id == "cluster_001" or \
-        cluster_id.endswith("_001")
+        cl.cluster_num(cluster_id) == 1
     is_final = _is_final_volume_cluster(manifest)
     out["cluster_id"] = cluster_id
     out["is_first"] = is_first
