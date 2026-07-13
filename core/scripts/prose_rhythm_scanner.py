@@ -105,8 +105,7 @@ INTENSITY_SINGLE_MAX = 12                                    # 单个强度副�
 _DIALOG_OPEN_CHARS = '""“”\'「『（('
 
 
-def cjk(s: str) -> int:
-    return sum(1 for c in s if '一' <= c <= '鿿')
+from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理源
 
 
 def _load_json(p: Path):

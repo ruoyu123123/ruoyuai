@@ -50,8 +50,7 @@ def _strip_changes(text: str) -> str:
     return text
 
 
-def _cjk(s: str) -> int:
-    return sum(1 for ch in s if "一" <= ch <= "鿿")
+from text_metrics import count_cjk as _cjk  # noqa: E402 字数口径单一真理源
 
 
 def _sentence_lengths(text: str) -> list:

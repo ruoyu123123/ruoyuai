@@ -24,8 +24,7 @@ import sys
 from pathlib import Path
 
 
-def _cjk(s):
-    return sum(1 for c in s if "一" <= c <= "鿿")
+from text_metrics import count_cjk as _cjk  # noqa: E402 字数口径单一真理源
 
 
 def _metrics(text):

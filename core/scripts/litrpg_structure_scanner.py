@@ -28,8 +28,7 @@ STAT_FLOOR = 0.5    # 系统/面板标记每千字下限(保守)
 ISSUE_CODE = "LITRPG_STRUCTURE"
 
 
-def cjk(s: str) -> int:
-    return sum(1 for c in s if '一' <= c <= '鿿')
+from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理源
 
 
 def scan(text: str, project: Path | None = None, style_path: Path | None = None) -> dict:

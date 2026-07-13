@@ -185,8 +185,11 @@ def _size_bytes(obj) -> int:
     return len(_dumps(obj).encode("utf-8"))
 
 
+from text_metrics import count_cjk  # noqa: E402 字数口径单一真理源
+
+
 def _cjk_count(obj) -> int:
-    return len(_CJK_RE.findall(_dumps(obj)))
+    return count_cjk(_dumps(obj))
 
 
 def section_tier(key: str) -> str | None:

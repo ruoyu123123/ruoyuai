@@ -62,8 +62,7 @@ def discover_drafts(drafts_dir: Path) -> list[tuple[Path, dict]]:
     return drafts
 
 
-def _cjk_count(text: str) -> int:
-    return len(re.findall(r"[\u4e00-\u9fff]", text))
+from text_metrics import count_cjk as _cjk_count  # noqa: E402 \u5b57\u6570\u53e3\u5f84\u5355\u4e00\u771f\u7406\u6e90
 
 
 def build_prompt(

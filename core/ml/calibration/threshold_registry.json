@@ -109,7 +109,7 @@
       "compares": "SFS 校准探针：text_a vs text_b（同作者/跨作者样本对）--cosine 相似度换算成 0-100 分制的线性公式，供 same/cross 分布可分性验证",
       "pinned_by_tests": [],
       "marker_lines": [
-        114
+        113
       ],
       "note": "与 sfs_axis_decomposer.py 公式重复（见该条 note）。本文件是唯一直接服务于 same-author vs cross-author 可分性测量 的探针脚本，是 W6-B 校准 harness 最可能复用的现成基座。"
     },
@@ -438,7 +438,7 @@
       "marker_lines": [
         24,
         50,
-        116
+        115
       ],
       "note": "已有真实数据：5 真作者实测密度 0.07-1.32/千字，floor=3.0 留 2.3x 余量，2026-06-20 已放量 active。"
     },
@@ -458,7 +458,7 @@
       "marker_lines": [
         24,
         50,
-        116
+        115
       ],
       "note": "与同文件 COARSE_EMOTION_PER_1K_FLOOR 是两条独立路径（关键词 vs 真 NN VAD），后者是全新维度，目前只有估算值（健康文本 2-3 轴和约 0.04-0.13），尚无真实作者 VAD 实测数据，校准优先级应低于已有实测基础的关键词路径。"
     },
@@ -632,7 +632,7 @@
         "tests/test_litrpg_structure_scanner.py"
       ],
       "marker_lines": [
-        64
+        63
       ],
       "note": "题材层 scanner（仅 genre=litrpg 激活）；文档明说暂无 LitRPG 金标准样本校准，待真游戏向书产出后校准。是本次盘点里唯一连一本参考样本书都还没有的条目，校准前提比其它条目更弱。"
     },
@@ -650,7 +650,7 @@
         "tests/test_romance_pacing_scanner_audit.py"
       ],
       "marker_lines": [
-        107
+        106
       ]
     },
     {
@@ -667,7 +667,7 @@
         "tests/test_romance_pacing_scanner_audit.py"
       ],
       "marker_lines": [
-        107
+        106
       ]
     },
     {
@@ -684,7 +684,7 @@
         "tests/test_romance_pacing_scanner_audit.py"
       ],
       "marker_lines": [
-        107
+        106
       ],
       "note": "题材层 scanner（仅 genre=romance 激活），与 litrpg_structure_scanner 同批次，文档同样明说暂无甜宠金标准样本校准，待真甜宠书产出后校准；本文件 3 个常量共享同一处标记（line 107 的 _doc 返回值字符串）。"
     },

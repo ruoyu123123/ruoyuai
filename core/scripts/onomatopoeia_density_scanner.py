@@ -44,8 +44,7 @@ def _mode() -> str:
     return m if m in ("off", "shadow", "active") else "shadow"
 
 
-def _cjk_count(text):
-    return sum(1 for ch in text if "一" <= ch <= "鿿")
+from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
 
 
 def _read_json(p: Path):

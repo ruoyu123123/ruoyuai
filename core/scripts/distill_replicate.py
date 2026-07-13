@@ -78,8 +78,7 @@ def read_text(p: Path | None, limit: int | None = None) -> str:
     return t
 
 
-def cjk_count(text: str) -> int:
-    return sum(1 for ch in text if '一' <= ch <= '鿿')
+from text_metrics import count_cjk as cjk_count  # noqa: E402 字数口径单一真理源
 
 
 def collapse_degenerate_runs(

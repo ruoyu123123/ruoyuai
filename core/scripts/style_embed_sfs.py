@@ -50,11 +50,8 @@ def _load_chunker():
         return clean_chapter, chunk_by_paragraph, cjk_count
     except Exception:
         import re as _re
-        _CJK = _re.compile(r"[一-鿿]")
+        from text_metrics import count_cjk as cjk_count  # noqa: E402 字数口径单一真理源
         _TITLE = _re.compile(r"^\s*第[0-9一二三四五六七八九十百千零两〇]+[章卷节回篇]")
-
-        def cjk_count(t: str) -> int:
-            return len(_CJK.findall(t))
 
         def clean_chapter(text: str) -> str:
             out = []

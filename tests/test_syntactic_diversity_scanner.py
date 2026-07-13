@@ -42,11 +42,12 @@ def test_cjk_counts_only_han():
 
 
 def test_cjk_boundary_codepoints():
-    """边界码点：'一'(U+4E00) 与 '鿿'(U+9FFF) 在区间内计入；区间外字符不计。"""
+    """边界码点：CJK Unified (U+4E00–U+9FFF) + 扩展A区 (U+3400–U+4DBF) 都计入
+    （字数口径已收敛到 text_metrics.count_cjk 单一真理源·含扩展A区·北极星⑥）。"""
     assert S.cjk("一") == 1
     assert S.cjk("鿿") == 1
-    # '㐀'(U+3400 扩展A) 在 '一'(U+4E00) 之下 → 不计（与脚本 '一'<=c<='鿿' 一致）
-    assert S.cjk("㐀") == 0
+    # '㐀'(U+3400 扩展A区) 计入——canonical count_cjk 覆盖扩展A区（比旧 BMP-only 更正确）
+    assert S.cjk("㐀") == 1
     assert S.cjk("一鿿一") == 3
 
 

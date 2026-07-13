@@ -27,8 +27,7 @@ RISK_WARNING_DAYS = 3                   # 3-7 天 = 预警 · <3 天 = critical
 _CJK_RE = re.compile(r"[一-鿿]")
 
 
-def _cjk_chars(text: str) -> int:
-    return len(_CJK_RE.findall(text))
+from text_metrics import count_cjk as _cjk_chars  # noqa: E402 字数口径单一真理源
 
 
 def scan_project_chars(project_root) -> tuple[int, int]:

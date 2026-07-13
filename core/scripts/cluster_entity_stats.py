@@ -89,8 +89,7 @@ def load_json(p: Path, default):
     return default
 
 
-def _cjk_len(text: str) -> int:
-    return len(_CJK_RE.findall(text))
+from text_metrics import count_cjk as _cjk_len  # noqa: E402 字数口径单一真理源
 
 
 # ═══════════════════ 已知实体收集（人物卡 + 角色池） ═══════════════════

@@ -39,8 +39,7 @@ RETENTION_DEFAULT = 0.25    # 无作者基线时后段保持度下限
 MONO_MINOR, MONO_MAJOR = 8, 12
 
 
-def cjk(s: str) -> int:
-    return sum(1 for c in s if '一' <= c <= '鿿')
+from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理源
 
 
 def _load_json(p: Path):

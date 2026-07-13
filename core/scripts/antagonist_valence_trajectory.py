@@ -73,8 +73,7 @@ def _load(p: Path, default=None):
         return default
 
 
-def _cjk_count(text: str) -> int:
-    return sum(1 for c in text if "一" <= c <= "鿿")
+from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
 
 
 def load_antagonists(project_root: Path) -> list:

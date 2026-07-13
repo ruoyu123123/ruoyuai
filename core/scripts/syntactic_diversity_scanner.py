@@ -78,8 +78,7 @@ _THEME_MIN_HITS = 4                                  # 至少 N 处共现才报�
 _DIALOGUE_SPAN = re.compile(r'["“「『][^"”」』\n]{0,300}["”」』]')
 
 
-def cjk(s: str) -> int:
-    return sum(1 for c in s if '一' <= c <= '鿿')
+from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理源
 
 
 def _load_json(p: Path):

@@ -45,8 +45,7 @@ _SIMILE = re.compile(r'(?:像|仿佛|如同|宛如|好似)([^，。！？、\n]{
 _VEHICLE_STRIP = re.compile(r'^(?:一[只个块条道张片把]?|那[只个块条道张片把]?|这[只个块条道张片把]?)')
 
 
-def cjk(s: str) -> int:
-    return sum(1 for c in s if '一' <= c <= '鿿')
+from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理源
 
 
 def _norm_vehicle(v: str) -> str:

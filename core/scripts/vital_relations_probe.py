@@ -58,8 +58,7 @@ VITAL_RELATIONS_LEXICON["_placeholder"] = True  # type: ignore
 CATEGORIES = ("identity", "causation", "time", "change", "part_whole", "intentionality", "analogy")
 
 
-def _cjk_count(text: str) -> int:
-    return sum(1 for ch in text if "一" <= ch <= "鿿")
+from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
 
 
 def count_relation_hits(text: str) -> dict[str, int]:

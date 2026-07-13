@@ -80,8 +80,7 @@ def _read_author_baseline(project_root) -> dict | None:
     return None
 
 
-def _cjk_count(text: str) -> int:
-    return sum(1 for ch in text if "一" <= ch <= "鿿")
+from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
 
 
 def _cluster_summary_text(c: dict) -> str:

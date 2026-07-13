@@ -29,8 +29,7 @@ EMOTION_PUNCT_FLOOR = 2.0  # 情绪标点(？…)每千字下限
 SENSORY_FLOOR = 3.0       # 五感词每千字下限
 
 
-def cjk(s: str) -> int:
-    return sum(1 for c in s if '一' <= c <= '鿿')
+from text_metrics import count_cjk as cjk  # noqa: E402 字数口径单一真理源
 
 
 def _load_json(p: Path):

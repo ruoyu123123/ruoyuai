@@ -139,9 +139,9 @@ def count_words(text: str) -> int:
     return len(re.sub(r"\s", "", text))
 
 
-def count_cjk(text: str) -> int:
-    """纯中日韩文字数（不含标点 / 空白 / 数字 / 字母）。"""
-    return len(re.findall(r"[一-鿿㐀-䶿]", text))
+# count_cjk 收敛到 text_metrics 单一真理源（全仓字数口径唯一实现·北极星⑥）；
+# 本处 re-export 保持 chapter_io.count_cjk 既有导入点不变。
+from text_metrics import count_cjk  # noqa: E402,F401
 
 
 # ============ 工具 ============

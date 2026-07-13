@@ -146,8 +146,7 @@ def _strip_changes(text: str) -> str:
     return text
 
 
-def _cjk_count(text: str) -> int:
-    return sum(1 for ch in text if "一" <= ch <= "鿿")
+from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
 
 
 _VAD_DRIFT_WINDOW = 40  # 命中词 ±40 字上下文窗口·供模型判该词在本文实际语境的 V/A

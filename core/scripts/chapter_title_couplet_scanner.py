@@ -103,8 +103,7 @@ def split_couplet(title):
     return None
 
 
-def cjk_len(s):
-    return len(CJK_PAT.findall(s))
+from text_metrics import count_cjk as cjk_len  # noqa: E402 字数口径单一真理源
 
 
 def punct_match(a, b):

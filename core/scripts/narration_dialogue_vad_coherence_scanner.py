@@ -69,8 +69,7 @@ def _strip_changes(text: str) -> str:
     return text
 
 
-def _cjk_count(text: str) -> int:
-    return sum(1 for ch in text if "一" <= ch <= "鿿")
+from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
 
 
 # ============ VAD 词典(复用 character_vad_ued 占位词典) ============
