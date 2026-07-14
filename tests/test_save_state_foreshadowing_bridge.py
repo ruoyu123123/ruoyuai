@@ -76,15 +76,16 @@ def test_register_is_idempotent_and_preserves_existing_terminal_state():
         assert fs014["status"] == "consumed" and fs014["_source"] == "manual"
 
 
-def test_register_rejects_noncanonical_brief_id_field():
+def test_register_rejects_entry_without_any_stable_id():
+    """fs_id 与 id 均缺 → 拒注册（fs_id 为权威主字段、id 为别名·两者皆无才是契约错误）。"""
     with tempfile.TemporaryDirectory() as directory:
-        project = _project(Path(directory), planned=[{"fs_id": "FS_OLD", "desc": "x"}])
+        project = _project(Path(directory), planned=[{"desc": "x", "tier": "A"}])
         try:
             ss._register_brief_foreshadowings(project, "cluster_001")
         except RuntimeError as exc:
             assert "稳定 id" in str(exc)
         else:
-            raise AssertionError("brief 必须使用 id")
+            raise AssertionError("fs_id/id 均缺的条目必须被拒")
 
 
 def test_terminal_payoff_consumes_at_cluster():
@@ -183,3 +184,21 @@ def test_missing_payoff_target_is_rejected_and_receipted():
         }])
         assert ss.cmd_apply_foreshadow_state(project, "cluster_001") == 0
         assert _receipt(project)["rejection_count"] == 1
+
+
+def test_brief_registers_v29_fs_id_surface_clue_form():
+    """真机 brief 形态回归锁：outline-planner 产 fs_id+surface_clue（无 id/desc），
+    save_state 必须走 fs_id or id 别名链注册；description 只存 surface 明线，
+    hidden_payoff 暗线绝不入账本描述位（明暗线隔离）。"""
+    with tempfile.TemporaryDirectory() as directory:
+        project = _project(Path(directory), planned=[{
+            "fs_id": "FS_001", "type": "setup", "tier": "A",
+            "surface_clue": "幼妹总爱望东海方向出神",
+            "hidden_payoff": "精卫填海", "trigger_cluster": "cluster_006",
+        }], scores=[])
+        assert ss.cmd_apply_foreshadow_state(project, "001") == 0
+        promises = _read_fs(project)["promises"]
+        assert len(promises) == 1
+        assert promises[0]["id"] == "FS_001"
+        assert promises[0]["description"] == "幼妹总爱望东海方向出神"
+        assert "精卫填海" not in json.dumps(promises[0], ensure_ascii=False)

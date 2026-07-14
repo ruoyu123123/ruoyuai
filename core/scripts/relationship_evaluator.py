@@ -120,13 +120,14 @@ def get_protagonist(cards: dict) -> str:
     characters = cards.get("characters")
     if not isinstance(characters, list) or not all(isinstance(item, dict) for item in characters):
         raise RelationshipContractError("人物卡.characters 必须是 object array")
-    # 主角位判定走 protagonist_lookup（role 自由文本兜底），保持「恰一个主角」硬契约
-    protagonists = [item.get("name") for item in characters
-                    if protagonist_lookup.is_protagonist_role(item.get("role"))]
-    protagonists = [name for name in protagonists if isinstance(name, str) and name]
-    if len(protagonists) != 1:
-        raise RelationshipContractError(f"人物卡必须恰有一个主角，当前={len(protagonists)}")
-    return protagonists[0]
+    # 关系图谱中心 = 主位主角（protagonist_cards 信号强度排序首位）。多主角书（双女主等）
+    # 合法，取主位做 heart-event 参照；0 个主角位才是契约错误（硬契约保留）。
+    ranked = protagonist_lookup.protagonist_cards(characters)
+    names = [c.get("name") for c in ranked
+             if isinstance(c.get("name"), str) and c.get("name")]
+    if not names:
+        raise RelationshipContractError("人物卡缺主角位（role 须以「主角」开头·多主角合法取主位）")
+    return names[0]
 
 
 def _relationships(document: dict) -> list[dict]:

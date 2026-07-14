@@ -263,3 +263,37 @@ def test_cli_requires_internal_state_pipeline(tmp_path):
     )
     assert result.returncode == 2
     assert "内部" in result.stderr
+
+
+def test_unignited_skeleton_skips_instead_of_fatal(tmp_path):
+    """回归锁：scaffold 裸骨架（protagonist 空+log 空+pool 空）→ 跳过评估不 FATAL。
+    真机《衔石与朝云》save-state step11 曾因此 exit 2（31 子系统裸骨架=合法 fluid）。"""
+    import json as _json
+    db = tmp_path / "_数据库"
+    db.mkdir(parents=True)
+    (db / "主角压力档.json").write_text(_json.dumps({
+        "_schema": "cluster_protagonist_stress", "schema_version": "1.0",
+        "_doc": "x", "consumption": {"layer": "direct_inject", "by": [], "status": "live"},
+        "protagonist": "", "stress_level": 0, "stress_max": 100,
+        "stress_threshold_break": 80, "stress_log": [],
+        "persona_violations_tracked": [], "mental_break_pool": [],
+        "coping_mechanisms": {},
+    }, ensure_ascii=False), encoding="utf-8")
+    import stress_evaluator as se
+    result = se.evaluate(tmp_path, "cluster_001")
+    assert result["skipped"] is True
+    assert result["mental_break_triggered"] is False
+
+
+def test_consumption_metadata_field_allowed_in_stress_card():
+    """回归锁：scaffold 统一的 consumption 消费方声明块不算 unknown 字段。"""
+    import stress_evaluator as se
+    doc = {
+        "_schema": "cluster_protagonist_stress", "schema_version": "1.0",
+        "consumption": {"layer": "direct_inject", "by": [], "status": "live"},
+        "protagonist": "女娃", "stress_level": 0, "stress_max": 100,
+        "stress_threshold_break": 80, "stress_log": [],
+        "persona_violations_tracked": {"core_traits": []}, "mental_break_pool": [],
+        "coping_mechanisms": {},
+    }
+    assert se.validate_stress(doc)

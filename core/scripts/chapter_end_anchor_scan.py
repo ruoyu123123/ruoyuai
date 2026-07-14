@@ -185,7 +185,7 @@ def collect_anchors(db_dir: Path) -> set[str]:
                 for sb in c.get("scene_storyboard", []) or []:
                     add_from_text(sb.get("summary", ""))
                 for fs in c.get("foreshadowing_to_plant", []) or []:
-                    add_from_text(fs.get("description", ""))
+                    add_from_text(fs.get("surface_clue") or fs.get("description") or "")
                 add_from_text(", ".join(c.get("characters_in_cluster", []) or []))
         except Exception:
             pass
@@ -283,7 +283,7 @@ def collect_anchor_texts(db_dir: Path) -> list[str]:
                 for sb in c.get("scene_storyboard", []) or []:
                     add(sb.get("summary", ""))
                 for fs in c.get("foreshadowing_to_plant", []) or []:
-                    add(fs.get("description", ""))
+                    add(fs.get("surface_clue") or fs.get("description") or "")
         except Exception:
             pass
 

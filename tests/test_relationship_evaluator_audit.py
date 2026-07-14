@@ -31,3 +31,16 @@ def test_character_cards_have_one_canonical_protagonist():
     for invalid in ({"主角": {"role": "主角"}}, {"characters": []}):
         with pytest.raises(module.RelationshipContractError):
             module.get_protagonist(invalid)
+
+
+def test_multi_protagonist_book_resolves_primary_not_fatal():
+    """双主角书（如双女主）合法：get_protagonist 取信号强度排序主位，不再 FATAL。
+    回归锁：真机《衔石与朝云》女娃/瑶姬双「主角·」前缀曾撞旧「恰一个」断言 exit 2。"""
+    cards = {"characters": [
+        {"id": "C_001", "name": "神农", "role": "末代神农·二女之父"},
+        {"id": "C_002", "name": "女娃", "role": "主角·炎帝幼女·刚烈幼妹"},
+        {"id": "C_003", "name": "瑶姬", "role": "主角·炎帝长女·柔深长姐"},
+    ]}
+    assert module.get_protagonist(cards) == "女娃"
+    with pytest.raises(module.RelationshipContractError):
+        module.get_protagonist({"characters": [{"id": "C_X", "name": "路人", "role": "配角"}]})

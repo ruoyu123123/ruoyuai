@@ -222,8 +222,10 @@ def update(project_root: Path, cluster_id: str) -> dict:
                     thread["dormant_since"] = ts
                     updated += 1
 
-    if updated > 0 or not sub_path.exists():
-        _save(sub_path, sub)
+    # 扫描痕迹总是落盘：last_scan 记录本 cluster 已处理（updated=0 也写）——
+    # plan receipt 的产物新鲜度校验以此区分「跑了无进展」与「压根没跑」
+    sub["last_scan"] = {"cluster_id": cluster_id, "at": ts, "subplot_updated": updated}
+    _save(sub_path, sub)
 
     # 四线脉络同理（同一 cluster_summary_text·同一 corpus_emb·同一 _thread_appears 判定）
     # tl 已在函数开头为 prefetch 收集提前读取（见上），此处复用不重复 _load

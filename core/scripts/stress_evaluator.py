@@ -86,7 +86,8 @@ def validate_stress(stress: dict) -> dict:
     }
     missing = required - set(stress)
     public = {key for key in stress if not str(key).startswith("_")}
-    allowed_public = required - {"_schema"}
+    # consumption = scaffold 骨架统一的消费方声明元数据（narrator_calibrate 同款豁免）
+    allowed_public = required - {"_schema"} | {"consumption"}
     unknown = public - allowed_public
     if missing or unknown:
         raise StressContractError(
@@ -251,9 +252,26 @@ def apply_card_to_event_table(project_root: Path, cluster_id: str, card: dict, p
     return record
 
 
+def is_unignited_skeleton(stress: dict) -> bool:
+    """未点火裸骨架 = protagonist 空且 stress_log/mental_break_pool 全空（scaffold 初始态）。
+    北极星纪律：31 子系统裸骨架合法 fluid（仅涟漪/ME池/storyboard 三码 hard），
+    未点火跳过评估；已点火（任一字段有值）则走 validate_stress 全套硬校验。"""
+    return (isinstance(stress, dict)
+            and not str(stress.get("protagonist") or "").strip()
+            and not stress.get("stress_log")
+            and not stress.get("mental_break_pool"))
+
+
 def evaluate(project_root: Path, cluster_id: str) -> dict:
     """评估并持久化一个 cluster，日志按 cluster_id 幂等替换。"""
     cluster_id = _require_cluster_id(cluster_id)
+    raw = _read_json(Path(project_root) / "_数据库" / "主角压力档.json")
+    if is_unignited_skeleton(raw):
+        return {
+            "cluster_id": cluster_id, "skipped": True,
+            "reason": "主角压力档为未点火裸骨架（protagonist/stress_log/mental_break_pool 全空）·合法 fluid·跳过评估",
+            "high_stress_warning": False, "mental_break_triggered": False,
+        }
     stress = load_stress(project_root)
     changes, draft = _cluster_artifacts(project_root, cluster_id)
     view = stress_view(stress)

@@ -114,14 +114,16 @@ def _register_brief_foreshadowings(root, cluster_key):
         for f in ftp:
             if not isinstance(f, dict):
                 raise RuntimeError("foreshadowing_to_plant 条目不是 object")
-            fid = f.get("id")
+            # fs_id 为主、id 为别名（outline-planner 合约 + build_manifest._sanitize 同款别名链）
+            fid = f.get("fs_id") or f.get("id")
             if not isinstance(fid, str) or not fid.strip():
-                raise RuntimeError("foreshadowing_to_plant 条目缺稳定 id")
+                raise RuntimeError("foreshadowing_to_plant 条目缺稳定 id（fs_id/id 均空）")
             if fid in existing:
                 continue
             entry = {
                 "id": fid, "setup_cluster": cid, "tier": f.get("tier", 3),
-                "description": f.get("desc") or f.get("description") or "",
+                # description 只存 surface 明线（hidden_payoff 暗线不入账本描述位·明暗线隔离）
+                "description": f.get("surface_clue") or f.get("desc") or f.get("description") or "",
                 "due_by_cluster": None, "status": "open", "owner": "writer",
                 "due_by_pending_resolution": True, "_source": "brief",
             }

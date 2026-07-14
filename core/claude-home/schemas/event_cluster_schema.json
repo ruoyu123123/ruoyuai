@@ -101,6 +101,23 @@
                     "B",
                     "C"
                   ]
+                },
+                "fs_id": {
+                  "type": "string",
+                  "pattern": "^FS_[0-9]{3}$",
+                  "description": "伏笔唯一 id（权威主字段·id 为历史别名·save_state/build_manifest 均走 fs_id or id 别名链）"
+                },
+                "surface_clue": {
+                  "type": "string",
+                  "description": "明线线索（写手可见·build_manifest plant 阶段只注入此字段）"
+                },
+                "hidden_payoff": {
+                  "type": "string",
+                  "description": "暗线兑现（严禁进正文·build_manifest 剥除·到 trigger_cluster 才随 reveal_directive 暴露）"
+                },
+                "trigger_cluster": {
+                  "type": "string",
+                  "description": "暗线兑现的目标 cluster_id"
                 }
               }
             },
