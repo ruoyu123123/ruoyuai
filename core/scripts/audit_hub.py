@@ -257,10 +257,13 @@ def _run(cmd: list, env_extra: dict = None, timeout: int = 180) -> tuple:
     timeout: 秒。NN scanner 批推理需要更长(300s)。
     """
     try:
-        env = None
+        import os as _os
+        # 强制子进程 UTF-8 输出：否则 GBK 控制台/无 PYTHONIOENCODING 的父环境(如 agent 上下文)下
+        # scanner 的 CJK stdout 按本地编码落字节，被这里的 encoding=utf-8 捕获成 mojibake →
+        # parse_fn 解析失败静默 issues=[] → 满载重跑时校验器结果被悄悄丢弃却仍出"完整"verdict。
+        env = {**_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         if env_extra:
-            import os as _os
-            env = {**_os.environ, **env_extra}
+            env.update(env_extra)
         p = subprocess.run(cmd, capture_output=True, text=True,
                            encoding="utf-8", errors="replace", timeout=timeout, env=env)
         return p.returncode, p.stdout or "", p.stderr or ""
