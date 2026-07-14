@@ -105,6 +105,34 @@ def copy_style(project_root: Path, style_name: str) -> int:
         print(f"[init_project] 拷 skill 双文件(作者风格.json + 作者风格_skill.md) from {style_name}")
     else:
         print(f"[init_project][WARN] 风格库 {style_name} 无 skill*.md（只拷了作者风格.json）")
+    # 绑定风格名到项目：写 style_choice.json 标记（answer.name 口径与
+    # reference_pattern_extract 的风格名解析一致），供下游按风格库原文抽取结构基线等消费方解析
+    wal = db / ".wal"
+    wal.mkdir(parents=True, exist_ok=True)
+    (wal / "style_choice.json").write_text(
+        json.dumps({"answer": {"name": style_name}, "source": "copy_style"},
+                   ensure_ascii=False, indent=2), encoding="utf-8")
+    # 拷贝第③步：在项目 作者风格.json 顶层写 style_source（相对仓库根·原文池反查唯一通路·
+    # learning_loop/snippet_seed/audit_hub/best-of-N 与 SFS/AV 打分全靠它反查·缺失=打分静默双退化）
+    if (src / "skill_FINAL.md").exists():
+        rel_target = "skill_FINAL.md"
+    elif skill and skill.exists():
+        rel_target = skill.name
+    else:
+        rel_target = "作者风格.json"
+    dst_prof = db / "作者风格.json"
+    try:
+        pdata = json.loads(dst_prof.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[init_project][FATAL] 作者风格.json 读取/解析失败，无法写 style_source: {e}",
+              file=sys.stderr)
+        return 2
+    if not isinstance(pdata, dict):
+        print(f"[init_project][FATAL] 作者风格.json 顶层非 dict（{type(pdata).__name__}），"
+              f"无法写 style_source: {dst_prof}", file=sys.stderr)
+        return 2
+    pdata["style_source"] = f"workspace/styles/{style_name}/{rel_target}"
+    dst_prof.write_text(json.dumps(pdata, ensure_ascii=False, indent=2), encoding="utf-8")
     return 0
 
 
