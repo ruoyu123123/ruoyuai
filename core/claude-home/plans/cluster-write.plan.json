@@ -22,7 +22,7 @@
       "description": "cluster_002+ 先消费用户选择 artifact 应用世界涟漪，接着 pre_write_gate.py 写前校验「世界状态/人物卡 × 选中 brief」（死亡角色上台/销毁道具/锁定事实恒定数值冲突=blocking exit 2 硬停·重复事件嫌疑=warning 只记·brief.gate_waivers 声明式豁免放行留痕），再由 build_manifest.py 生成 cluster 起首章 manifest（注入 cluster brief + 全 25+ 子系统状态）+ style_injector 注入风格指令。cluster_001 无前置选择，不执行 world_evolution_apply_card；pre_write_gate 检测到 cluster_001 优雅 skip（报告仍落盘）。",
       "required": true,
       "skip_output_allowed": false,
-      "_doc_h7_fix": "2026-05-29 复审修复（H7）：plan_tracker create 只传 cluster key；模板不得使用旧章号占位。step1 改目录级检查：.manifest 目录必由 build_manifest save_json mkdir 落地（起首章号 START_CH 由 cluster range 运行时解析，不属于 plan_id key）。.style_directive 仅在项目有 style_profile 时才写（条件产物），从 hard expected_output 移除避免误 FAIL。",
+      "_doc_outputs": "expected_outputs 全部是精确文件（禁目录形态：目录只要存在就永远校验通过，等于零校验，且会被 PostToolUse 观察 hook 误判成本步产物）。build_manifest 的 manifest 文件名按 cluster 起首章运行时定名（ch_<NNN>.json·plan 模板禁章号占位符），主代理跑 plan_tracker step --n 1 时用 --output \"_数据库/.manifest/ch_<起首章:03d>.json\" 追加校验它真落盘。.style_directive 仅在项目有 style_profile 时才写（条件产物），不进 expected_outputs。",
       "_doc_pipeline": "主代理 Claude Code 执行 scripts。<cluster_start_ch> 用 cluster_lookup 权威算出（上一 cluster 范围 hi+1），主代理跑脚本前解析填实。cluster_002+ 正式走向卡应用必须成功；cluster_001 不调用 world_evolution_apply_card。auto_fate_draw 是正式状态生产者：无事件池、无可用事件或已有绑定时必须写结构化 decision artifact；抽签失败或产物损坏必须阻断。行首 ? 仅保留给 style_injector 这类有明确“项目未启用风格库”条件的产物脚本。",
       "_doc_c16": "🔴 2026-06-27 C16：build-manifest=cluster 开写前/走向卡前步·加 research_ref（调研先行门·走向决策证据）。刻意指 .research_cache 目录而非定值文件：① novel-researcher 输出是时间戳变名（{task_type}_{slug}_{ts}）② 目录在 outline step2 创建 ③ 主代理据此记录研究证据，不接 writer 正文步（step2）。",
       "research_ref": "_数据库/.research_cache",
@@ -35,7 +35,6 @@
       ],
       "_doc_a2_gate": "🔴 2026-07-07 A2 写前 Evolution Gate（PlotPilot gate_service 移植）：pre_write_gate.py 位于 world_evolution_apply_card（brief 落库）之后、auto_fate_draw/build_manifest 之前——穿帮从「写完 20k 字再修」提前到「写前拦」。blocking=写前拒绝非审计 issue（不新增 hard_gate code·19 码清单零变动）；brief.gate_waivers 是创作声明权（北极星⑤·gate 只拦未声明的意外穿帮）；cluster_001 脚本内部检测优雅 skip exit 0 且报告仍落盘（expected_outputs 恒满足）。",
       "expected_outputs": [
-        "_数据库/.manifest",
         "_数据库/.manifest/cluster_{key}_fate_draw_decision.json",
         "_数据库/.wal/cluster_{key}_pre_write_gate.json"
       ]
@@ -53,9 +52,10 @@
       ],
       "judge_report_path": "章节/cluster_{key}_draft/cluster_{key}_draft.txt",
       "skip_output_allowed": false,
+      "_doc_outputs": "claude_scenes/ 目录形态已换成 step 2a 的两个精确产物（拼接基线 draft_claude.txt + self_eval 草稿 changes_claude.json）——目录存在性等于零校验；scene_*.txt 数量运行时才定，拼接基线与 self_eval 草稿是 Claude 亲笔那一半的确定性证据，gen_writer 缺 claude_scenes 直接 FATAL。",
       "expected_outputs": [
-        "章节/cluster_{key}_draft/claude_scenes/",
         "章节/cluster_{key}_draft/cluster_{key}_draft_claude.txt",
+        "章节/cluster_{key}_draft/cluster_{key}_changes_claude.json",
         "章节/cluster_{key}_draft/cluster_{key}_draft.txt",
         "章节/cluster_{key}_draft/cluster_{key}_changes.json"
       ]
@@ -215,11 +215,15 @@
     {
       "n": 7,
       "name": "plan-end",
-      "description": "报告 cluster_write 完成 + plan 最终校验 + 准备进入 cluster-save-state",
+      "description": "报告 cluster_write 完成 + plan 最终校验 + 准备进入 cluster-save-state。plan_end_receipt.py 逐条核对 step 1-6 真完成（status=completed 且 verified_outputs 实体文件仍在）→ 写收尾回执；任一步假完成或产物丢失 = [FATAL] exit 2，本步不得标完成。",
       "required": true,
       "skip_output_allowed": false,
+      "_doc_outputs": "收尾步的产物 = 可验证的 plan 最终校验回执（cluster_<key>_write_end.json），不是「_数据库/.wal 目录存在」这种零校验占位。",
+      "scripts": [
+        "python core/scripts/plan_end_receipt.py {project_root} --plan-id {plan_id} --step 7 --command cluster-write"
+      ],
       "expected_outputs": [
-        "_数据库/.wal"
+        "_数据库/.wal/cluster_{key}_write_end.json"
       ]
     }
   ]

@@ -1,6 +1,6 @@
 {
   "command": "cluster-save-state",
-  "version": 6,
+  "version": 7,
   "description": "cluster 级状态保存 14 步流水线：校验创作自评、并行梳理实体归档与运行态增量、确定性回库、卷边界摘要、各子系统更新、反思学习、涌现下一 cluster，并提交 Git 快照。",
   "total_steps": 14,
   "required_steps": [
@@ -24,19 +24,16 @@
   "steps": [
     {
       "n": 1,
-      "name": "wal-start+schema-validate",
-      "description": "开启 cluster 级 WAL + db_schema_validate.py 严格校验 34 个 canonical JSON。",
+      "name": "schema-validate",
+      "description": "db_schema_validate.py 严格校验 34 个 canonical JSON，并写确定性校验报告（结果/错误数/advisory 数/时间戳）。",
       "required": true,
       "skip_output_allowed": false,
-      "_doc_pipeline": "WAL 骨架由主代理 touch_outputs 建（.json 后缀写 {} 合法骨架）。",
-      "touch_outputs": [
-        "_数据库/.wal/cluster_{key}_save_state.json"
-      ],
+      "_doc_pipeline": "step 产物 = db_schema_validate --report-out 写的校验报告 JSON（真实 writer 落盘·非 touch 占位）；校验不过时报告照写、脚本 exit 1 阻断。",
       "expected_outputs": [
-        "_数据库/.wal/cluster_{key}_save_state.json"
+        "_数据库/.wal/cluster_{key}_schema_validate.json"
       ],
       "scripts": [
-        "python core/scripts/db_schema_validate.py {project_root}"
+        "python core/scripts/db_schema_validate.py {project_root} --report-out _数据库/.wal/cluster_{key}_schema_validate.json"
       ]
     },
     {
@@ -320,11 +317,15 @@
     {
       "n": 14,
       "name": "wal-end",
-      "description": "关闭 cluster WAL + plan 最终校验",
+      "description": "关闭 cluster WAL + plan 最终校验。plan_end_receipt.py 逐条核对 step 1-13 真完成（status=completed 且 verified_outputs 实体文件仍在）→ 写收尾回执；任一步假完成或产物丢失 = [FATAL] exit 2，本步不得标完成。",
       "required": true,
       "skip_output_allowed": false,
+      "_doc_outputs": "收尾步的产物 = 可验证的 plan 最终校验回执（cluster_<key>_save_state_end.json），不是「_数据库/.wal 目录存在」这种零校验占位——目录形态 expected_output 恒真且会被 PostToolUse 观察 hook 当成任意 .wal 写入的产物。",
+      "scripts": [
+        "python core/scripts/plan_end_receipt.py {project_root} --plan-id {plan_id} --step 14 --command cluster-save-state"
+      ],
       "expected_outputs": [
-        "_数据库/.wal"
+        "_数据库/.wal/cluster_{key}_save_state_end.json"
       ]
     }
   ],

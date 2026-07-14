@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""wal_recovery WAL 断点恢复回归网。
+"""wal_recovery 续跑点检测回归网（续跑点唯一真相源 = plan JSON）。
 
 锁完成/中断分类判据：plan_tracker 持久化用 completed_at/aborted_at 时间戳（顶层无 status
 字段），分类必须查时间戳——只查 p.get("status")（恒 None）会把所有 plan 误判中断

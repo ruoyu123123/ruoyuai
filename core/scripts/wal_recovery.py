@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -32,6 +31,8 @@ try:
 except Exception:  # pragma: no cover
     def child_python():
         return sys.executable
+
+from proc_utils import run_utf8
 
 
 # 兜底目录（绝大多数情况不存在 —— plan 实际落在 <project>/_数据库/.plans/）。
@@ -92,11 +93,10 @@ def list_plans_for_project(project_arg: str, project_name: str) -> list[dict]:
         return out
     # 兜底：plan_tracker list 文本解析
     try:
-        result = subprocess.run(
+        # run_utf8：强制子进程 UTF-8 输出 + utf-8/replace 解码，中文 plan 名不会解成 mojibake
+        result = run_utf8(
             [child_python(), str(scripts_dir() / "plan_tracker.py"), "list"],  # frozen-aware
-            # errors="replace" 防子进程在 Windows GBK 控制台输出中文时 reader 线程
-            # UnicodeDecodeError 崩（仅靠外层 except 兜底会丢 stdout）
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10
+            timeout=10,
         )
         return _parse_plan_list_output(result.stdout, project_name)
     except Exception:

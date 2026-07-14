@@ -41,7 +41,7 @@
         "OUTPUT_DIR": "_数据库/.distill_character/{key}_claude_drafts"
       },
       "judge_report_path": "_数据库/.distill_character/{key}_claude_drafts/agent_report.json",
-      "expected_outputs": ["_数据库/.distill_character/{key}_claude_drafts", "_数据库/.distill_character/{key}_claude_drafts/agent_report.json"]
+      "expected_outputs": ["_数据库/.distill_character/{key}_claude_drafts/agent_report.json"]
     },
     {
       "n": 4,

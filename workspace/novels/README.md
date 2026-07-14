@@ -41,7 +41,7 @@ workspace/novels/{书名}/
 │   ├── 写作经验.json
 │   ├── 用户偏好.json
 │   └── 作者风格.json        # 蒸馏出的风格档案（可选）
-└── _数据库/.wal/            # 崩溃恢复日志
+└── _数据库/.wal/            # 各 step 的产物与回执存放区（summary/state_delta/archive/receipt 等）
 ```
 
 ## 字段示例

@@ -14,12 +14,13 @@ outline）在 Agent 或命令执行时**无法跳步**：
 - 命令结束时必须 end <plan_id>，检查所有 required 步骤已完成；
 - 任何中途中止必须 abort <plan_id> --reason，留下审计痕迹。
 
-与 save_state.py 内置 WAL 的关系
--------------------------------
-- WAL 是 cluster-save-state 单命令内的细粒度断点恢复（completed_steps）；
+与 `.wal/` 产物区的关系
+----------------------
+- `.wal/` 是各 step 的产物与回执存放区（summary / state_delta / receipt 等），
+  不是断点机制；续跑点唯一真相源 = plan JSON 的 steps[].status（wal_recovery 读取）；
 - plan_tracker 是**所有命令**统一的强制规划层（plan_id + verified_outputs）；
-- 二者**共存不冲突**——本工具不动 WAL 的任何字段；attestation 也只加 plan
-  JSON 的 `_attestation` 字段，不触碰 WAL（见 lessons L8.4）。
+- 本工具不读写 `.wal/` 产物内容（touch_outputs 只按 plan 模板建 0 字节存在性标记）；
+  attestation 只加 plan JSON 的 `_attestation` 字段（见 lessons L8.4）。
 
 防篡改 attestation
 ------------------

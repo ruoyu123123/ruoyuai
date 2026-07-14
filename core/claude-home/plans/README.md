@@ -39,11 +39,12 @@ plan 脚本行里的 `<...>` 占位符由**主代理**在执行前解析填实�
   source_json 字段取值回填。
 - `{project_root}` / `{project}` / `{key}` / `{cluster_id}` / `{next_key}` / `{plan_id}`：由 `plan_tracker` 在 create 时替换。`{ch}` 系列旧章号占位符会被硬拒。
 
-## 与 WAL / attestation 的关系
+## 与 `.wal/` / attestation 的关系
 
-- **WAL**（`cluster-save-state` 单命令内的 `completed_steps`）：单命令内部状态和诊断记录；恢复点以 plan_tracker / wal_recovery 的 first incomplete step 为准。
+- **恢复点的唯一真相源 = plan JSON 本身**（`_数据库/.plans/<plan_id>.json` 的 `steps[].status`）：`wal_recovery.py` 读它算 first incomplete step。
+- **`.wal/`**：各 step 的产物与回执存放区（summary / state_delta / archive / reflection / titles / receipt 等），供下游 step 消费和 `expected_outputs` 验收——**不承载 step 进度，不是断点日志**。
+- cluster-save-state step 1 的产物是 `cluster_<key>_schema_validate.json` 确定性校验报告（`db_schema_validate.py --report-out` 落盘）；模板不用 `touch_outputs` 造 0 字节占位当 step 产物，禁止据任何 `.wal/` 文件判断中断/完成。
 - **plan**（本目录）：跨命令、粗颗粒、可审计的强制规划层。
-- 二者共存不冲突——plan_tracker 不动 WAL 字段，WAL 不动 plan_tracker 状态。
 - 合法手动改 plan 后用 `plan_tracker.py reattest <plan_id>` 重新盖章。
 
 详见项目根 `CLAUDE.md`「🛡️ Plan 强制规划」+「🔴 禁止跳步」段，以及

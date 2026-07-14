@@ -1,27 +1,32 @@
 #!/usr/bin/env python3
-"""
-PostToolUse Hook: 监测 Write/Edit 操作，自动追踪活跃 plan 步骤完成
+"""PostToolUse Hook: 观察 Write/Edit 产物与活跃 plan 的对应关系。
 
 关键约束
 --------
-- exit 0 = 放行（默认）；本 hook 永不拦截（exit 2 会破坏所有 Write/Edit）
-- 只观察 + 辅助，匹配到则自动 step_complete，匹配失败仅打 stderr
-- plan_tracker 不可用/未配置 → 静默放行，不影响主流程
+- exit 0 = 放行（永不拦截；exit 2 会打断所有 Write/Edit）
+- 只观察 + 提示；**绝不越权替主代理写 plan 状态**
+- plan_tracker 不可用/未配置 → 静默放行
 
-匹配规则
+匹配规则（精确文件级）
 --------
-- 对每个活跃 plan 的每个未完成 step：
-  * 若 step.expected_outputs 中某个路径与当前写入文件路径匹配 →
-    自动调用 step_complete(plan_id, n, output=file_path)
-- 路径匹配采用归一化（/ 替换 \）+ 后缀匹配 + 子串匹配（双向兜底）
+写入路径与 step.expected_outputs 的匹配只认「归一化后完全相等」或「按 `/` 边界对齐的
+路径后缀」。禁止目录前缀命中与子串命中：`_数据库/.wal` 这类目录形态的 expected 不会被
+`_数据库/.wal/xxx.json` 的写入命中，同一次写入也不会同时点亮无关 step。
 
-附加功能（self-correct injection）
+step 状态写入纪律
 --------
-- 60 分钟未完成的 plan 输出 stderr 警告（不拦截）
-- auto-step 成功后追加「下一步提示」—— 把 next expected_outputs
-  反馈给 agent context，形成 self-correct 链式引导
-- 停滞检测：plan 已 in_progress 但 >10 分钟无任何 step 完成 →
-  输出 drift 提示（不拦截，仅 stderr 提醒 agent 检查）
+- required 且 `skip_output_allowed != true` 的 step（= 全部主链 step）：hook **一律不自动完成**，
+  只打「产物已落盘，请主代理跑 plan_tracker step --n N 收口」提示。与 PreToolUse 防跳步守卫
+  (`pretooluse_plan_step_anti_skip.py`) 同一口径——前门拦跳步，后门不得放行。
+- 其余 step（未标 required 或模板显式 `skip_output_allowed: true`）：先自查 expected_outputs
+  全部落盘，再走**正常** `step_complete`（不传 skip_output，不跳校验）；任何一个产物缺失
+  或 step_complete 抛错 → 只打 stderr 提示，不写 plan 状态。
+
+附加观察
+--------
+- 60 分钟未完成的 plan 打 stderr 警告（不拦截）
+- 命中后追加「下一步提示」：把 next required step 的 expected_outputs 回灌 agent context
+- 停滞检测：plan in_progress 但 >10 分钟无 step 完成 → drift 提示（不拦截）
 """
 import json
 import sys
@@ -34,40 +39,87 @@ from datetime import datetime
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
 sys.path.insert(0, str(_SCRIPTS_DIR))
 try:
-    from plan_tracker import find_active_plans, step_complete  # type: ignore
+    from plan_tracker import (  # type: ignore
+        find_active_plans, step_complete, resolve_project_root,
+    )
 except Exception:
     # plan_tracker 模块缺失或损坏：直接放行
     sys.exit(0)
 
 
 def _normalize(p: str) -> str:
-    """路径归一化：反斜杠转正斜杠 + 去除多余分隔符。"""
+    """路径归一化：反斜杠转正斜杠 + 折叠重复分隔符 + 去尾部分隔符。"""
     if not p:
         return ""
-    return p.replace("\\", "/").strip()
+    out = str(p).replace("\\", "/").strip()
+    while "//" in out:
+        out = out.replace("//", "/")
+    while out.endswith("/") and len(out) > 1:
+        out = out[:-1]
+    return out
+
+
+def _is_dir_shaped(expected: str) -> bool:
+    """expected 是否目录形态（尾部 `/` 或 `\\`）。目录形态一律不参与匹配。"""
+    raw = str(expected or "").strip()
+    return raw.endswith("/") or raw.endswith("\\")
 
 
 def _path_matches(file_path: str, expected: str) -> bool:
-    """判断写入文件是否匹配 expected_output。
+    """写入文件是否**精确**命中 expected_output（文件级，不做目录前缀/子串匹配）。
 
-    规则（任一命中即匹配）：
-    1. 归一化后双向后缀匹配（避免绝对/相对路径差异）
-    2. expected 是 file_path 的子串
-    3. file_path 是 expected 的子串（防止 expected 比实际更长的情况）
+    命中条件（归一化 + 大小写不敏感，Windows 路径语义）：
+      1. 完全相等；
+      2. 写入路径以 `/` 边界对齐的方式以 expected 结尾（expected 为项目相对路径）；
+      3. expected 以 `/` 边界对齐的方式以写入路径结尾（expected 为绝对路径的兜底）。
+
+    `_数据库/.wal`（目录）绝不会被 `_数据库/.wal/cluster_001_x.json`（文件）命中——
+    任何写入 .wal/ 的文件都点亮 wal-end step 正是被根治的越权 bug。
     """
     if not file_path or not expected:
         return False
+    if _is_dir_shaped(expected):
+        return False
     fp = _normalize(file_path).lower()
     exp = _normalize(expected).lower()
-    if not exp:
+    if not fp or not exp:
         return False
-    # 后缀匹配
-    if fp.endswith(exp) or exp.endswith(fp):
+    if fp == exp:
         return True
-    # 子串匹配（双向）
-    if exp in fp or fp in exp:
+    if fp.endswith("/" + exp):
+        return True
+    if exp.endswith("/" + fp):
         return True
     return False
+
+
+def _is_locked_step(step: dict) -> bool:
+    """required 且未显式允许 skip_output → hook 不得自动完成（尊重防跳步守卫）。"""
+    if not step.get("required"):
+        return False
+    return step.get("skip_output_allowed") is not True
+
+
+def _missing_outputs(plan: dict, step: dict) -> list:
+    """自查 expected_outputs 落盘情况（相对路径按 plan.project 解析）。"""
+    expected = step.get("expected_outputs") or []
+    try:
+        root = resolve_project_root(plan.get("project")) if plan.get("project") else None
+    except Exception:
+        root = None
+    missing = []
+    for raw in expected:
+        if not raw:
+            continue
+        p = Path(str(raw))
+        if not p.is_absolute() and root is not None:
+            p = root / str(raw)
+        try:
+            if not p.exists():
+                missing.append(str(raw))
+        except OSError:
+            missing.append(str(raw))
+    return missing
 
 
 def _cooldown_ok(plan_id: str, label: str, cooldown_min: int = 10) -> bool:
@@ -140,22 +192,54 @@ def _check_drift(plan: dict, threshold_min: int = 10) -> None:
         return
 
 
-def _next_step_hint(plan: dict, just_completed_n) -> str:
-    """找到刚完成 step 的下一个 required 未完成 step，返回提示字符串。"""
-    steps = plan.get("steps", [])
-    completed_set = {str(s.get("n")) for s in steps if s.get("status") == "completed"}
-    # 找下一个 required 未完成 step
-    for s in steps:
-        n = s.get("n")
-        if str(n) in completed_set:
+def _next_step_hint(plan: dict) -> str:
+    """下一个 required 未完成 step 的提示字符串（含其 expected_outputs 前 2 个）。"""
+    for s in plan.get("steps", []):
+        if s.get("status") == "completed":
             continue
         if not s.get("required"):
             continue
-        # 取该步 expected_outputs（前 2 个）
         exp = (s.get("expected_outputs") or [])[:2]
         exp_hint = "; ".join(exp) if exp else "(无 expected_outputs)"
-        return f"下一步: step {n} ({s.get('name')}), 期望输出: {exp_hint}"
+        return f"下一步: step {s.get('n')} ({s.get('name')}), 期望输出: {exp_hint}"
     return ""  # 没有后续 required step
+
+
+def _observe_step(plan: dict, plan_id: str, step: dict, file_path: str) -> None:
+    """一个 step 被写入命中后的处理：主链 step 只提示，非主链 step 走正常 step_complete。"""
+    n = step.get("n")
+    name = step.get("name")
+    if _is_locked_step(step):
+        # 主链 required step：状态由主代理跑 plan_tracker step 收口（走完整 expected_outputs 校验）
+        print(f"📋 [Plan] {plan_id} step {n} ({name}) 的 expected_output 已落盘: {file_path}\n"
+              f"   ↪ hook 不代跑收口：请主代理执行 "
+              f"`python core/scripts/plan_tracker.py step {plan_id} --n {n}`",
+              file=sys.stderr)
+        return
+
+    missing = _missing_outputs(plan, step)
+    if missing:
+        print(f"📋 [Plan] {plan_id} step {n} ({name}) 产物未齐，未自动收口。缺: {missing[:3]}",
+              file=sys.stderr)
+        return
+
+    try:
+        # 正常 step_complete（不传 skip_output → expected_outputs 全量校验照跑）
+        step_complete(plan_id, n, output=None)
+    except Exception as exc:
+        print(f"⚠️ [Plan] {plan_id} step {n} 自动收口失败（未改状态）: {exc}",
+              file=sys.stderr)
+        return
+
+    msg = f"📋 [Plan] {plan_id} step {n} ({name}) auto-completed"
+    try:
+        from plan_tracker import get_plan  # type: ignore
+        hint = _next_step_hint(get_plan(plan_id))
+        if hint:
+            msg = f"{msg}\n   ↪ {hint}"
+    except Exception:
+        pass  # 取下一步提示失败不影响主流程
+    print(msg, file=sys.stderr)
 
 
 def main():
@@ -168,12 +252,16 @@ def main():
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError):
         sys.exit(0)
+    if not isinstance(data, dict):
+        sys.exit(0)
 
     tool = data.get("tool_name", "")
     if tool not in ("Write", "Edit"):
         sys.exit(0)  # 只关心 Write/Edit
 
     tool_input = data.get("tool_input", {})
+    if not isinstance(tool_input, dict):
+        sys.exit(0)
     file_path = tool_input.get("file_path", "")
     if not file_path:
         sys.exit(0)
@@ -193,36 +281,13 @@ def main():
         plan_id = plan.get("id")
         if not plan_id:
             continue
-        steps = plan.get("steps", [])
-        for step in steps:
+        for step in plan.get("steps", []):
             if step.get("status") == "completed":
                 continue
             expected = step.get("expected_outputs", []) or []
-            matched = False
-            for exp in expected:
-                if _path_matches(file_path, exp):
-                    matched = True
-                    break
-            if matched:
-                # 自动标记 step（skip_output=True：不强制再校验，因为写入正在发生）
-                try:
-                    step_complete(plan_id, step["n"], output=None, skip_output=True)
-                    msg = (f"📋 [Plan] {plan_id} step {step.get('n')} "
-                           f"({step.get('name')}) auto-completed")
-                    # self-correct: 追加「下一步提示」给 agent context
-                    # 重新读取 plan（因为 step_complete 改了文件），以拿到最新状态
-                    try:
-                        from plan_tracker import get_plan  # type: ignore
-                        latest = get_plan(plan_id)
-                        hint = _next_step_hint(latest, step["n"])
-                        if hint:
-                            msg = f"{msg}\n   ↪ {hint}"
-                    except Exception:
-                        pass  # 取下一步提示失败不影响主流程
-                    print(msg, file=sys.stderr)
-                except Exception as exc:
-                    print(f"⚠️ [Plan] auto-step failed for {plan_id} step {step.get('n')}: {exc}",
-                          file=sys.stderr)
+            if not any(_path_matches(file_path, exp) for exp in expected):
+                continue
+            _observe_step(plan, plan_id, step, file_path)
 
         # 超时检测（每个 plan 独立检查）
         _check_timeout(plan)

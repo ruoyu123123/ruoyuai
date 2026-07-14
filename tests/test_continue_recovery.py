@@ -3,8 +3,8 @@
 /continue 续写靠 wal_recovery 算「从哪一步续跑」。恢复点算错会**重放已完成步**或
 **漏跑未完成步**。本测试锁定：
 
-  ① completed_steps=[1,2,3] → 恢复从 step4（done+1·连续完成正常路径·不漏 4）
-  ② WAL/plan JSON 损坏 → wal_recovery 降级不崩（坏文件跳过·好 plan 照常报）
+  ① steps 1-3 已 completed → 恢复从 step4（done+1·连续完成正常路径·不漏 4）
+  ② plan JSON 损坏 → wal_recovery 降级不崩（坏文件跳过·好 plan 照常报）
   ③ 非连续完成（中途步 pending、后续步 completed）→ 恢复点 = **第一个未完成步**，
      而非 completed 计数+1
 
@@ -79,7 +79,7 @@ def _run_wal_main(*argv) -> tuple:
 # ============ ① 连续完成 [1,2,3] → 续跑 step4（不漏 4·正常路径）============
 
 def test_completed_prefix_resumes_from_next_step():
-    """completed_steps=[1,2,3]（7 步 plan）→ exit 1 + 「续跑 ... --n 4」。"""
+    """steps 1-3 已 completed（7 步 plan）→ exit 1 + 「续跑 ... --n 4」。"""
     with _wal_sandbox() as (proj, plans_dir):
         statuses = ["completed", "completed", "completed", "pending", "pending", "pending", "pending"]
         _write_plan(plans_dir, _plan_with_steps("续跑回归书_cw_001", "cluster-write",
@@ -102,7 +102,7 @@ def test_resume_step_matches_done_count_plus_one_for_all_prefixes():
             assert f"--n {k + 1}" in out, f"完成 {k} 步应续跑 step{k+1}·实际:\n{out}"
 
 
-# ============ ② WAL/plan JSON 损坏 → 降级不崩 ============
+# ============ ② plan JSON 损坏 → 降级不崩 ============
 
 def test_corrupt_plan_json_degrades_without_crash():
     """plans 目录混入损坏 JSON → wal_recovery 跳过坏文件·照常报好 plan·不抛异常。"""
@@ -163,7 +163,7 @@ def test_first_resume_step_helper_unit():
     assert wr._first_resume_step([{"status": "pending"}], 0) == 1
 
 
-# ============ ③' completed_steps 与 plan_tracker step 状态一致性 ============
+# ============ ③' done_count 与 plan_tracker step 状态一致性 ============
 
 def test_done_count_consistent_with_plan_tracker_step_status():
     """wal_recovery 的「X/Y 步」done_count 与 plan_tracker step 状态口径一致：
