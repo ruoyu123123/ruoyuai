@@ -38,6 +38,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import protagonist_lookup  # noqa: E402  主角反查单一真理源
+
 _SEED_TAG = "world_seed_init"
 _ORG_SUFFIX = "局会殿庭教团盟门派署部堂会社帮阁宗"  # 角色 role 里的组织后缀 → 推势力名
 
@@ -135,16 +138,27 @@ def derive_factions(arc_state: dict, ensemble: dict, explicit: list[str]) -> lis
     return names[:3]
 
 
-def _protagonist(arc_state: dict) -> tuple[str, dict]:
-    """从 character_arc_state 取主角 (name, info)。无显式 role==主角 时取第一个。"""
+def _protagonist(arc_state: dict, project_root: Path | None = None) -> tuple[str, dict]:
+    """从 character_arc_state 取主角 (name, info)。
+
+    ① characters[*].role / is_protagonist 显式主角信号；
+    ② protagonist_lookup 全仓单一真理源多源反查（人物卡/事件簇/角色池），命中 characters
+      key 才采用；解析不出 → ("", {})（不猜第一个 key·上层跳过 protagonist 播种并响亮提示）。
+    """
     chars = arc_state.get("characters", {})
     if not isinstance(chars, dict) or not chars:
         return "", {}
     for name, info in chars.items():
-        if isinstance(info, dict) and info.get("role") == "主角":
+        if isinstance(info, dict) and (
+                protagonist_lookup.is_protagonist_role(info.get("role"))
+                or info.get("is_protagonist") is True):
             return name, info
-    name = next(iter(chars))
-    return name, chars[name] if isinstance(chars[name], dict) else {}
+    if project_root is not None:
+        resolved = protagonist_lookup.resolve_protagonist(project_root)
+        if resolved and resolved in chars:
+            info = chars[resolved]
+            return resolved, info if isinstance(info, dict) else {}
+    return "", {}
 
 
 # ---------- 播种构造 ----------
@@ -210,7 +224,7 @@ def build_npc_threads(arc_state: dict, protagonist_name: str,
     for name, info in chars.items():
         if name == protagonist_name or not isinstance(info, dict):
             continue
-        if info.get("role") == "主角":
+        if protagonist_lookup.is_protagonist_role(info.get("role")):
             continue
         marker = info.get("current_stage_at_cluster", "")
         stage = marker.split(":", 1)[-1] if isinstance(marker, str) else ""
@@ -261,7 +275,12 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
         arc_state,
         ensemble,
         explicit_factions)
-    prot_name, prot_info = _protagonist(arc_state)
+    prot_name, prot_info = _protagonist(arc_state, project_root)
+    if not prot_name:
+        print("[world_seed_init] protagonist 解析不出（character_arc_state 无显式主角位·"
+              "protagonist_lookup 多源反查未命中）· 不猜第一个角色 · "
+              "跳过 protagonist_state + NPC thread 播种，请补 role=主角 后重跑",
+              file=sys.stderr)
 
     report = {
         "me_count": len(me_pairs),
@@ -351,8 +370,10 @@ def seed(project_root: Path, *, explicit_factions: list[str], force: bool,
             m = re.match(r"NT_(\d+)", str(t.get("thread_id", "")))
             if m:
                 max_nt = max(max_nt, int(m.group(1)))
+    # protagonist 解析不出时不播 NPC thread：thread 播种靠主角身份做排除，
+    # 无主角身份会把真主角误播成幕后 NPC（污染 world_evolution 演化账本）。
     new_threads = build_npc_threads(
-        arc_state, prot_name, max_nt + 1)
+        arc_state, prot_name, max_nt + 1) if prot_name else []
     for t in new_threads:
         if t["npc_id"] not in existing_npcs:
             threads.append(t)

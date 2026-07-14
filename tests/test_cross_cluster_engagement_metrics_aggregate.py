@@ -120,6 +120,72 @@ def test_truth_check_mismatch_is_counted_without_new_gate() -> None:
     assert metrics["ending_type_mismatches"] == 1
 
 
+def test_ending_type_advisory_excluded_from_mismatch_count() -> None:
+    """G4①回归锁：ending_type_advisory 非空（作者自由文学标签）→ 不计 mismatch，单列 advisory。"""
+    metrics = scanner.collect_cluster_metrics([
+        cluster_record(
+            "cluster_001",
+            truth_check={
+                "verdict": "pass",
+                "ending_type_match": False,
+                "ending_type_advisory": {
+                    "field": "applied_style.ending_type",
+                    "declared": "死兆留白钩",
+                    "actual": "场景硬收",
+                },
+            },
+        ),
+        cluster_record(
+            "cluster_002",
+            truth_check={"verdict": "fail", "ending_type_match": False},
+        ),
+    ])
+    # cluster_001 是自由文学标签 → advisory 不计 mismatch；cluster_002 无 advisory → 真 mismatch
+    assert metrics["ending_type_mismatches"] == 1
+    assert len(metrics["ending_type_advisories"]) == 1
+    assert metrics["ending_type_advisories"][0]["cluster_id"] == "cluster_001"
+    assert metrics["ending_type_advisories"][0]["declared"] == "死兆留白钩"
+
+
+def test_ending_type_advisory_is_consumed_not_orphan() -> None:
+    """G4①回归锁：ending_type_advisory 有真实消费者（≥3 触发 taxonomy drift advisory）。"""
+    advisories = [
+        {"cluster_id": f"cluster_{n:03d}", "declared": "死兆留白钩", "detected": "场景硬收"}
+        for n in range(1, 4)
+    ]
+    findings = scanner.scan_ending_type_advisories(advisories)
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding["code"] == "ENDING_TYPE_TAXONOMY_DRIFT"
+    assert finding["gate_level"] == "advisory"
+    assert finding["count"] == 3
+    # <3 不触发（跨 cluster 视野才有意义）
+    assert scanner.scan_ending_type_advisories(advisories[:2]) == []
+
+
+def test_ending_type_advisory_surfaces_in_cli_report() -> None:
+    """G4①端到端：advisory 计数进 metrics_collected + drift finding 进 findings。"""
+    records = [cluster_record(
+        f"cluster_{n:03d}", ending_type="场景硬收",
+        audit={"summary": {}, "issues": [], "scanner_status": []},
+        truth_check={
+            "verdict": "pass", "ending_type_match": False,
+            "ending_type_advisory": {"declared": "死兆留白钩", "actual": "场景硬收"},
+        },
+    ) for n in range(1, 4)]
+    project, db, td = _project(records)
+    try:
+        result = _run(project)
+        report = json.loads(sorted(
+            (db / ".cross_cluster_scan").glob("engagement_metrics_*.json"))[-1]
+            .read_text(encoding="utf-8"))
+        assert report["metrics_collected"]["ending_type_mismatches"] == 0
+        assert report["metrics_collected"]["ending_type_advisories"] == 3
+        assert any(f["code"] == "ENDING_TYPE_TAXONOMY_DRIFT" for f in report["findings"])
+    finally:
+        td.cleanup()
+
+
 def test_cli_writes_cluster_report() -> None:
     records = [cluster_record(
         f"cluster_{n:03d}", ending_type="场景硬收",

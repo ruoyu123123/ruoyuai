@@ -176,7 +176,7 @@ def test_temporal_and_spatial_samples_detected(built, monkeypatch):
     assert any("第四天" in str((v.get("anchor_pair") or ["", ""])[1])
                for v in rep_t["violations"])
     s1 = _sample_dir(out, "S1_spatial_teleport_chain")
-    rep_s = sp.scan(_draft_of(s1), project_root=s1, cluster_mode=True)
+    rep_s = sp.scan(_draft_of(s1), project_root=s1, cluster_arg="cluster_001")
     got = {(v["from_location"], v["to_location"]) for v in rep_s["violations"]}
     assert ("义庄大厅", "乱葬岗") in got and ("乱葬岗", "钟楼顶层") in got
 
@@ -192,7 +192,7 @@ def test_baseline_zero_violations_all_layers(built, monkeypatch):
     draft = _draft_of(b)
     assert lf.scan(b, draft)["conflicts_count"] == 0
     assert dt.scan(draft, project_root=b, cluster_arg="cluster_001")["violations"] == []
-    assert sp.scan(draft, project_root=b, cluster_mode=True)["violations"] == []
+    assert sp.scan(draft, project_root=b, cluster_arg="cluster_001")["violations"] == []
 
 
 # ════════════════════════ 7. 纯模板锁（LLM 增广路径不复活） ════════════════════════

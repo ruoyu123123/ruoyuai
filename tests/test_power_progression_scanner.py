@@ -194,6 +194,47 @@ def test_codes_not_hard_gate():
         assert c not in hgs
 
 
+def test_no_protagonist_signal_does_not_guess_first_key():
+    """回归锁：角色弧线无显式主角位且 protagonist_lookup 反查不出 → 空跑 advisory 说明，
+    绝不 fallback 取第一个 key 瞎猜（「解析不出就猜」反模式·与 audit_hub 同类清除对齐）。"""
+    bak = os.environ.get("POWER_PROGRESSION_MODE")
+    try:
+        _set_mode("active")
+        arc = _make_series(6, regress_at=3)
+        # 抹掉主角信号：若 fallback 猜第一个 key，会对配角 tier 序列误报 regression
+        arc["characters"]["主角"].pop("role", None)
+        proj = _mk_project(arc=arc)
+        rep = pp.scan(str(_write("x")), project_root=proj)
+        assert "解析不出" in rep.get("note", "")
+        assert "不猜" in rep.get("note", "")
+        assert rep["violations"] == []
+        assert "protagonist" not in rep
+        assert rep["verdict"] == "PASS"
+    finally:
+        _set_mode(bak)
+
+
+def test_protagonist_lookup_fallback_resolves_via_character_cards():
+    """arc 无显式主角位但人物卡有主角卡且名字命中 arc key → 经 protagonist_lookup
+    单一真理源反查解析成功（不是瞎猜）。"""
+    bak = os.environ.get("POWER_PROGRESSION_MODE")
+    try:
+        _set_mode("active")
+        arc = _make_series(6, regress_at=3)
+        arc["characters"]["沈砚"] = arc["characters"].pop("主角")
+        arc["characters"]["沈砚"].pop("role", None)
+        proj = _mk_project(arc=arc)
+        (proj / "_数据库" / "人物卡.json").write_text(
+            json.dumps({"characters": [{"name": "沈砚", "role": "主角"}]},
+                       ensure_ascii=False), encoding="utf-8")
+        rep = pp.scan(str(_write("x")), project_root=proj)
+        assert rep.get("protagonist") == "沈砚"
+        codes = [v["code"] for v in rep["violations"]]
+        assert "POWER_TIER_REGRESSION" in codes
+    finally:
+        _set_mode(bak)
+
+
 def test_mode_invalid_falls_back():
     os.environ["POWER_PROGRESSION_MODE"] = "bogus"
     try:

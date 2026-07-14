@@ -4,9 +4,13 @@
 
 用法：
     python db_schema_validate.py <项目路径>
+    python db_schema_validate.py <项目路径> --report-out <报告路径>   # 全库校验 + 确定性校验报告 JSON
     python db_schema_validate.py <项目路径> --require-quantitative-keys [作者档路径]
     python db_schema_validate.py <项目路径> --post-edit <被手改的子系统JSON路径>
     python db_schema_validate.py <项目路径> --revalidate-after-manual <路径>   # 同义
+
+--report-out：仅全库校验模式可用（cluster-save-state step1 消费）。无论校验过/不过都写报告
+（result / errors_count / warnings_count / 明细 / 时间戳），退出码语义不变。相对路径相对项目根解析。
 
 退出码：
     0  全部通过
@@ -17,8 +21,10 @@
 import argparse
 import sys
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
+import protagonist_lookup
 from atomic_json import load_json_strict
 
 
@@ -145,6 +151,40 @@ def check_style_source(db_root: Path) -> list[str]:
             "作者风格.json: 有 quantitative 实载荷但缺 style_source（原文池反查唯一通路·"
             "缺失=SFS/AV 打分静默双退化）——按 outline.md 作者风格拷贝三步的第③步补写"
             "（如 workspace/styles/<风格名>/skill_FINAL.md）")
+    return errors
+
+
+def check_protagonist_contract(db_root: Path) -> list[str]:
+    """人物卡必须有 canonical 主角位（role 以「主角」开头）。
+
+    [2026-07-14 长恨_e2e 真机实证] outline-planner 把 role 写成自由文学描述
+    （"炎帝幼女·不甘认命的刚烈幼妹（日后化精卫的执念主角之一）"）→ 全仓 role=='主角'
+    精确匹配的主角反查全部落空 → pov_consistency 直接 _fatal 空跑、pattern/结构类
+    scanner 退化成无主角基线。consumer 侧已收敛到 protagonist_lookup 多源兜底，
+    producer 侧在这里把 canonical 形态设成硬契约，消除契约债根因。
+
+    characters 为空（fluid 骨架，角色尚未涌现）→ 不报（合法稀疏）。
+    """
+    errors: list[str] = []
+    path = db_root / "人物卡.json"
+    if not path.exists():
+        return errors
+    data = _safe_load(path)
+    if not isinstance(data, dict):
+        return errors
+    cards = data.get("characters")
+    if not isinstance(cards, list) or not cards:
+        return errors
+    if protagonist_lookup.has_canonical_protagonist(cards):
+        return errors
+    fallback = protagonist_lookup.resolve_protagonist_detail(db_root.parent)["name"]
+    roles = [c.get("role") for c in cards if isinstance(c, dict)][:5]
+    errors.append(
+        f"[PROTAGONIST_ROLE_NOT_CANONICAL] 人物卡.characters 无 canonical 主角位"
+        f"（{protagonist_lookup.CANONICAL_ROLE_HINT}）·现有 role={roles!r}"
+        f"·多源兜底解析结果={fallback!r} — 主角反查是 pov/结构/风格 scanner 的公共基线，"
+        f"缺 canonical 主角位 = 契约债，请把主角卡 role 改成「主角·<原描述>」"
+    )
     return errors
 
 
@@ -556,6 +596,10 @@ def revalidate_after_manual(file_path: Path) -> int:
         errors.extend(fs_errs)
         warnings.extend(fs_warns)
 
+    # 2.6) 人物卡：canonical 主角位（role 以「主角」开头·全仓主角反查的公共基线）
+    if stem == "人物卡":
+        errors.extend(check_protagonist_contract(file_path.parent))
+
     # 3) C03 载荷非空（涟漪规则/事件簇·大势卡已由 step2 覆盖不重复）
     if stem not in _LOAD_BEARING_DEDICATED:
         lb = _eval_single_load_bearing(stem, obj)
@@ -579,6 +623,7 @@ def revalidate_after_manual(file_path: Path) -> int:
             print(f"  {e}")
         print("\n[修复 hint]")
         print("  · TYPE_MISMATCH → collection 字段（characters/locations/...）须是数组而非对象")
+        print("  · PROTAGONIST_ROLE_NOT_CANONICAL → 人物卡主角卡 role 改成「主角·<原描述>」")
         print("  · GRAND_TREND_* → ME 池每条带 id+volume·每卷 ≥1 is_volume_finale·prereq 指向存在 ME")
         print("  · FORESHADOW_STATUS_INVALID → promises[].status 只能是 open/suspended/consumed")
         print("  · LOAD_BEARING_EMPTY → 涟漪规则 rules / 事件簇 clusters[0].scene_storyboard 不可清空")
@@ -588,6 +633,29 @@ def revalidate_after_manual(file_path: Path) -> int:
     return 0
 
 
+def write_validation_report(report_path: Path, project_root: Path,
+                            errors: list[str], warnings: list[str]) -> None:
+    """写全库校验的确定性报告 JSON（cluster-save-state step1 的 step 产物）。
+
+    无论校验过/不过都落盘——报告本身就是「本次校验真实跑过」的可审计证据；
+    退出码语义仍由 errors 决定，报告不改变阻断行为。
+    """
+    report = {
+        "command": "db_schema_validate",
+        "project": project_root.name,
+        "result": "fail" if errors else "pass",
+        "errors_count": len(errors),
+        "warnings_count": len(warnings),
+        "errors": errors,
+        "warnings": warnings,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[report] 校验报告已写入 {report_path}")
+
+
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project_root", type=Path)
@@ -595,6 +663,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     edit_group.add_argument("--post-edit", type=Path)
     edit_group.add_argument("--revalidate-after-manual", type=Path)
     parser.add_argument("--require-quantitative-keys", nargs="?", const="")
+    parser.add_argument("--report-out", type=Path,
+                        help="全库校验模式：写确定性校验报告 JSON（相对路径相对项目根解析）")
     return parser.parse_args(argv)
 
 
@@ -604,9 +674,17 @@ def main():
 
     edit_path = args.post_edit or args.revalidate_after_manual
     if edit_path is not None:
+        if args.report_out is not None:
+            print("[FATAL] --report-out 仅用于全库校验模式，不能与 --post-edit / "
+                  "--revalidate-after-manual 组合", file=sys.stderr)
+            sys.exit(2)
         sys.exit(revalidate_after_manual(edit_path))
 
     if args.require_quantitative_keys is not None:
+        if args.report_out is not None:
+            print("[FATAL] --report-out 仅用于全库校验模式，不能与 --require-quantitative-keys 组合",
+                  file=sys.stderr)
+            sys.exit(2)
         profile_path = (Path(args.require_quantitative_keys)
                         if args.require_quantitative_keys else project_root / "作者风格.json")
         sys.exit(_require_quantitative_keys(profile_path))
@@ -631,6 +709,9 @@ def main():
     # 🔴 2026-07-08 验证书实证：作者风格实载荷必须带 style_source（原文池反查·缺=打分静默双退化）
     total_errors.extend(check_style_source(db_root))
 
+    # 🔴 2026-07-14 长恨_e2e 实证：人物卡必须有 canonical 主角位（全仓主角反查的公共基线）
+    total_errors.extend(check_protagonist_contract(db_root))
+
     # 🔴 2026-06-27 C11：cluster 级幂等不变量（advisory · 并入 warnings · 不计 errors）
     total_warnings.extend(check_idempotency_invariants(db_root))
 
@@ -653,6 +734,12 @@ def main():
         print(f"\n[错误]")
         for e in total_errors:
             print(f"  {e}")
+
+    if args.report_out is not None:
+        report_path = args.report_out
+        if not report_path.is_absolute():
+            report_path = project_root / report_path
+        write_validation_report(report_path, project_root, total_errors, total_warnings)
 
     sys.exit(1 if total_errors else 0)
 

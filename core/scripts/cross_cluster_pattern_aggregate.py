@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import cluster_summary_reader as csr  # noqa: E402
 import atomic_json  # noqa: E402
+import protagonist_lookup  # noqa: E402
 
 
 IDIOM_COOLDOWN_DICT = [
@@ -66,13 +67,9 @@ def load_json(path: Path, default=None):
 
 
 def get_protagonist(project_root: Path, override: str | None) -> str:
-    if override:
-        return override
-    cards = load_json(project_root / "_数据库" / "人物卡.json", {}) or {}
-    for character in cards.get("characters") or []:
-        if isinstance(character, dict) and character.get("role") == "主角":
-            return character.get("name") or character.get("id") or "主角"
-    return "主角"
+    """主角名（protagonist_lookup 唯一反查）·全解析不出退占位串 "主角"（名字密度等指标不至崩）。"""
+    return protagonist_lookup.resolve_protagonist(
+        project_root, override=override, default="主角")
 
 
 def get_catchphrases(project_root: Path, protagonist: str) -> list[dict]:

@@ -305,8 +305,10 @@ def test_collect_checker_briefs_validator_and_embedded_judge(tmp_path):
     brief_dir = proj / "_数据库" / ".checker_briefs"
     brief_dir.mkdir(parents=True)
     (brief_dir / "cluster_001_validator.json").write_text(json.dumps({
-        "version": 1,
-        "chapter_path": "章节/cluster_001_draft/cluster_001_draft.txt",
+        "version": 2,
+        "carrier": "cluster",
+        "cluster_id": "cluster_001",
+        "draft_path": "章节/cluster_001_draft/cluster_001_draft.txt",
         "checker": "novel-validator-checker",
         "mode": "cluster",
         "violations": [
@@ -358,7 +360,9 @@ def test_collect_checker_briefs_validator_and_embedded_judge(tmp_path):
     assert judge["calibration_features"]["judge_id"] == "novel-validator-checker"
 
 
-def test_collect_checker_briefs_voice_issue_and_clean_positive(tmp_path):
+def test_collect_checker_briefs_voice_issue_and_legacy_v1_loudly_skipped(tmp_path, capsys):
+    """v2 voice brief 正常收样本；v1 遗留 brief（chapter_path 载体）必须响亮跳过提示重产，
+    不得无声 continue（回归锁：brief 契约统一 v2 后静默过滤 = 训练样本通道整体无声死亡）。"""
     import data_collector as dc
     proj = tmp_path / "novel"
     db = proj / "_数据库"
@@ -369,8 +373,10 @@ def test_collect_checker_briefs_voice_issue_and_clean_positive(tmp_path):
         "clusters": [{"cluster_id": "cluster_001", "chapter_range": [4, 4]}],
     }, ensure_ascii=False), encoding="utf-8")
     (brief_dir / "cluster_001_voice.json").write_text(json.dumps({
-        "version": 1,
-        "chapter_path": "章节/cluster_001_draft/cluster_001_draft.txt",
+        "version": 2,
+        "carrier": "cluster",
+        "cluster_id": "cluster_001",
+        "draft_path": "章节/cluster_001_draft/cluster_001_draft.txt",
         "checker": "novel-voice-checker",
         "violations": [
             {
@@ -394,6 +400,7 @@ def test_collect_checker_briefs_voice_issue_and_clean_positive(tmp_path):
         ],
         "judge_report": {"judge_id": "novel-voice-checker", "overall_grade": "B", "confidence": 0.8},
     }, ensure_ascii=False), encoding="utf-8")
+    # v1 遗留 brief（chapter 载体·契约已清除）→ 响亮跳过 · 零样本
     (brief_dir / "ch_004_voice.json").write_text(json.dumps({
         "version": 1,
         "chapter_path": "章节/第004章/第004章.txt",
@@ -409,13 +416,53 @@ def test_collect_checker_briefs_voice_issue_and_clean_positive(tmp_path):
     (proj / "章节" / "cluster_001_draft").mkdir(parents=True)
 
     result = ClusterDataCollector(str(proj), "cluster_001").collect()
-    assert result["checker_briefs"] == 5
+    err = capsys.readouterr().err
+    assert "非 v2 checker brief" in err and "ch_004_voice.json" in err, \
+        "v1 遗留 brief 必须响亮提示重产（不得无声 continue）"
+    assert "重产" in err
+    assert result["checker_briefs"] == 3
     manifest = json.loads(dc._MANIFEST.read_text(encoding="utf-8"))
-    assert manifest["models"]["voice_drift"]["records"] == 2
+    assert manifest["models"]["voice_drift"]["records"] == 1
     assert manifest["models"]["coherence"]["records"] == 1
-    assert manifest["models"]["judge_reliability"]["records"] == 2
+    assert manifest["models"]["judge_reliability"]["records"] == 1
     voice_lines = (dc._POOL_DIR / "voice_drift" / "checker_briefs.jsonl").read_text(encoding="utf-8").splitlines()
     assert any(json.loads(line)["label"] == "CHECKER_voice_drift" for line in voice_lines)
+    # v1 brief 的 clean-A 样本不得进池
+    assert not any(json.loads(line)["label"] == "VOICE_CLEAN_A" for line in voice_lines)
+    # 违规样本记录 v2 draft_path（v1 chapter_path 字段已清除）
+    assert all("chapter_path" not in json.loads(line) for line in voice_lines)
+    assert any(json.loads(line).get("draft_path", "").endswith("cluster_001_draft.txt")
+               for line in voice_lines)
+
+
+def test_collect_checker_briefs_voice_clean_positive_v2(tmp_path):
+    """v2 clean voice brief（violations 空 + judge A + evidence_quotes）→ VOICE_CLEAN_A 正样本。"""
+    import data_collector as dc
+    proj = tmp_path / "novel"
+    brief_dir = proj / "_数据库" / ".checker_briefs"
+    brief_dir.mkdir(parents=True)
+    (brief_dir / "cluster_001_voice.json").write_text(json.dumps({
+        "version": 2,
+        "carrier": "cluster",
+        "cluster_id": "cluster_001",
+        "draft_path": "章节/cluster_001_draft/cluster_001_draft.txt",
+        "checker": "novel-voice-checker",
+        "violations": [],
+        "judge_report": {
+            "judge_id": "novel-voice-checker",
+            "overall_grade": "A",
+            "confidence": 0.95,
+            "evidence_quotes": [{"character": "陆衍", "quote": "「坑在这儿。」", "voice_match": "匹配短句"}],
+        },
+    }, ensure_ascii=False), encoding="utf-8")
+    (proj / "章节" / "cluster_001_draft").mkdir(parents=True)
+
+    result = ClusterDataCollector(str(proj), "cluster_001").collect()
+    assert result["checker_briefs"] == 2
+    manifest = json.loads(dc._MANIFEST.read_text(encoding="utf-8"))
+    assert manifest["models"]["voice_drift"]["records"] == 1
+    assert manifest["models"]["judge_reliability"]["records"] == 1
+    voice_lines = (dc._POOL_DIR / "voice_drift" / "checker_briefs.jsonl").read_text(encoding="utf-8").splitlines()
     assert any(json.loads(line)["label"] == "VOICE_CLEAN_A" for line in voice_lines)
 
 

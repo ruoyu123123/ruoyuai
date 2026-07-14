@@ -600,6 +600,8 @@ EXCLUDED_FROM_FLYWHEEL: dict[str, str] = {
     "ITEM_NOT_YET_INTRODUCED": "一致性硬核对（锁定事实/物件持有客观冲突·非主观工艺判断，性质同 hard_gate 契约）",
     "LOCKED_FACT_CONFLICT": "一致性硬核对（锁定事实/物件持有客观冲突·非主观工艺判断，性质同 hard_gate 契约）",
     "LOCKED_FACT_CROSS_SCENE_CONFLICT": "一致性硬核对（锁定事实/物件持有客观冲突·非主观工艺判断，性质同 hard_gate 契约）",
+    # 分类法口径对账提示（detector 有限分类法 vs 作者自由文学标签的元数据脱节信号·非正文质量·北极星⑤）
+    "ENDING_TYPE_TAXONOMY_DRIFT": "分类法口径对账提示（detector 有限分类法 vs 作者自由文学标签的元数据脱节信号·非正文质量·北极星⑤）",
     # 导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）
     "CHAPTER_BODY_FILE_MISSING": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",
     "CHAPTER_DUPLICATE": "导出/切章格式契约（纯格式层字数守恒核对·非创作判断，北极星④章节仅格式边界）",

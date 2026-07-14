@@ -103,6 +103,83 @@ def test_compute_waiver_audit_orphan_codes_and_counts():
     assert meta["advisory_waived"] == 1
 
 
+def test_compute_waiver_audit_orphan_suggestions_close_match():
+    """orphan code 拼错真实 code → orphan_suggestions 给出最接近的真实 code 纠正建议。"""
+    all_issues = [_adv("NARRATIVE_repetition"), _adv("NARRATIVE_pov")]
+    waivers = [{"code": "NARRATIVE_repetiton", "reason": "拼错一个字母"}]
+    meta = ah._compute_waiver_audit(all_issues, waivers, [])
+    assert meta["orphan_codes"] == ["NARRATIVE_repetiton"]
+    assert meta["orphan_suggestions"]["NARRATIVE_repetiton"] == "NARRATIVE_repetition"
+    assert meta["present_issue_codes"] == ["NARRATIVE_pov", "NARRATIVE_repetition"]
+
+
+def test_compute_waiver_audit_orphan_suggestion_none_when_no_close():
+    """完全编造、与真实 code 无相似度 → 建议为 None（不硬凑误导）。"""
+    all_issues = [_adv("A")]
+    waivers = [{"code": "GHOST_TOTALLY_MADE_UP", "reason": "x"}]
+    meta = ah._compute_waiver_audit(all_issues, waivers, [])
+    assert meta["orphan_suggestions"] == {"GHOST_TOTALLY_MADE_UP": None}
+
+
+# ═══════════════════════ 3b. orphan 响亮化（控制台块 + dispatch 反馈） ═══════════════════════
+
+def test_orphan_warning_lines_empty_when_no_orphan():
+    assert ah._orphan_waiver_warning_lines({"orphan_codes": []}) == []
+    assert ah._orphan_waiver_warning_lines({}) == []
+    assert ah._orphan_waiver_warning_lines(None) == []
+
+
+def test_orphan_warning_lines_content():
+    """[WARN] 块：每个 orphan code + 「从未生效」+ 建议真实 code + 本次真实 codes。"""
+    wa = {
+        "orphan_codes": ["NARRATIVE_repetiton", "GHOST_X"],
+        "orphan_suggestions": {"NARRATIVE_repetiton": "NARRATIVE_repetition",
+                               "GHOST_X": None},
+        "present_issue_codes": ["NARRATIVE_pov", "NARRATIVE_repetition"],
+    }
+    lines = ah._orphan_waiver_warning_lines(wa)
+    blob = "\n".join(lines)
+    assert all(line.startswith("[WARN]") for line in lines)
+    assert "从未生效" in blob
+    assert "NARRATIVE_repetiton" in blob
+    assert "最接近的真实 code: NARRATIVE_repetition" in blob
+    assert "无近似的真实 code" in blob
+    assert "NARRATIVE_pov, NARRATIVE_repetition" in blob
+
+
+def test_orphan_feedback_text_contains_invalid_and_real_codes():
+    wa = {
+        "orphan_codes": ["GHOST_X"],
+        "orphan_suggestions": {"GHOST_X": "NARRATIVE_gmc"},
+        "present_issue_codes": ["NARRATIVE_gmc"],
+    }
+    fb = ah._orphan_waiver_feedback(wa)
+    assert "GHOST_X" in fb and "无效" in fb
+    assert "建议改用: NARRATIVE_gmc" in fb
+    assert "本次真实 issue codes 是 [NARRATIVE_gmc]" in fb
+    # 无 orphan → 空串（pending_agent 不加字段）
+    assert ah._orphan_waiver_feedback({"orphan_codes": []}) == ""
+
+
+def test_orphan_warning_block_printed_in_summary(capsys):
+    """_print_summary 对 orphan 豁免打印显著 [WARN] 块（不淹没在 scanner 输出里）。"""
+    report = {
+        "chapter": 1, "verdict": "pass",
+        "summary": {"fatal": 0, "error": 0, "warning": 0, "info": 0, "waived": 0, "total": 0},
+        "waived_issues": [], "auto_fixed": [], "pending_agent": [],
+        "waiver_audit": {
+            "orphan_codes": ["GHOST_X"],
+            "orphan_suggestions": {"GHOST_X": None},
+            "present_issue_codes": [],
+        },
+    }
+    ah._print_summary(report, Path("dummy.json"))
+    out = capsys.readouterr().out
+    assert "[WARN] 豁免失效（orphan）" in out
+    assert "GHOST_X" in out and "从未生效" in out
+    assert "无需豁免" in out  # 本次无 issue 时如实说明
+
+
 def test_compute_waiver_audit_blanket_by_rate():
     """5 advisory · 豁免 4 → rate 0.8 > 0.7 → blanket_suspected。"""
     all_issues = [_adv(f"C{i}") for i in range(5)]
@@ -267,6 +344,40 @@ def test_integration_hard_gate_waiver_force_ignored_with_meta():
         assert "GHOST_NOT_PRESENT" in wa["orphan_codes"]
         assert wa["advisory_total"] == 4   # hard_gate 不进分母
         assert wa["advisory_waived"] == 4
+
+
+def test_integration_orphan_feedback_attached_to_dispatch_payload():
+    """🔴 orphan 响亮化闭环：writer 拼错 waiver code → 每条 pending_agent dispatch payload
+    携带 waiver_feedback（「你的 waiver code 无效 + 建议真实 code + 本次真实 codes」），
+    且 verdict 裁决逻辑不受影响（META-only·北极星⑤）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        proj, scan = _make_sandbox(tmp, with_hard_gate=True)
+        waivers = [{"code": "NARRATIVE_repetiton", "reason": "拼错的 code（orphan）"}]
+        with _patched_script_dir(scan):
+            report = ah.audit_chapter(proj, 1, False, waivers=waivers)
+        wa = report["waiver_audit"]
+        assert wa["orphan_codes"] == ["NARRATIVE_repetiton"]
+        assert wa["orphan_suggestions"]["NARRATIVE_repetiton"] == "NARRATIVE_repetition"
+        assert report["pending_agent"], "hard_gate 在场必有派单"
+        for p in report["pending_agent"]:
+            fb = p.get("waiver_feedback", "")
+            assert "NARRATIVE_repetiton" in fb and "无效" in fb
+            assert "本次真实 issue codes" in fb
+            assert "LOCKED_FACT_CONFLICT" in fb
+        # verdict 不因 orphan 反馈改变（信息透明化不是新门禁）
+        assert report["verdict"] == "needs_agent"
+
+
+def test_integration_no_orphan_no_feedback_field():
+    """无 orphan 时 pending_agent 不注入 waiver_feedback（字段只在需要时出现）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        proj, scan = _make_sandbox(tmp, with_hard_gate=True)
+        with _patched_script_dir(scan):
+            report = ah.audit_chapter(proj, 1, False, waivers=[])
+        assert report["pending_agent"]
+        assert all("waiver_feedback" not in p for p in report["pending_agent"])
 
 
 # ═══════════════════════ 5. learning_loop cluster ledger ═══════════════════════

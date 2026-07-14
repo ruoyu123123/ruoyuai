@@ -34,6 +34,7 @@ import statistics
 import sys
 from pathlib import Path
 
+import protagonist_lookup
 from atomic_json import load_json
 
 ISSUE_CODE_REGRESSION = "POWER_TIER_REGRESSION"
@@ -88,19 +89,27 @@ def _arc_state(project_root):
     return _read_json(p) if p.exists() else None
 
 
-def _protagonist_id(arc_state):
+def _protagonist_id(arc_state, project_root=None):
+    """角色弧线.json characters 里的主角 key。
+
+    ① characters[*].role / is_protagonist 显式主角信号；
+    ② protagonist_lookup 全仓单一真理源多源反查（人物卡/事件簇/角色池），命中 arc key 才采用；
+    解析不出 → None（不猜第一个 key·scan() 空跑出 advisory 说明）。
+    """
     if not isinstance(arc_state, dict):
         return None
     chars = arc_state.get("characters")
     if not isinstance(chars, dict):
         return None
     for name, info in chars.items():
-        if isinstance(info, dict) and info.get("role") in (
-                "protagonist", "主角", "主"):
+        if isinstance(info, dict) and (
+                protagonist_lookup.is_protagonist_role(info.get("role"))
+                or info.get("is_protagonist") is True):
             return name
-    # fallback first character
-    for name in chars:
-        return name
+    if project_root:
+        resolved = protagonist_lookup.resolve_protagonist(project_root)
+        if resolved and resolved in chars:
+            return resolved
     return None
 
 
@@ -210,9 +219,11 @@ def scan(draft_path, project_root=None) -> dict:
     if not arc:
         out["note"] = "无 _数据库/角色弧线.json · 跳过(北极星②)"
         return out
-    pid = _protagonist_id(arc)
+    pid = _protagonist_id(arc, project_root)
     if not pid:
-        out["note"] = "无 protagonist · 跳过"
+        out["note"] = ("protagonist 解析不出（角色弧线.json 无显式主角位·"
+                       "protagonist_lookup 多源反查未命中 arc key）· 不猜第一个角色 · "
+                       "空跑跳过(advisory)")
         return out
     series = _tier_series(arc, pid)
     out["protagonist"] = pid

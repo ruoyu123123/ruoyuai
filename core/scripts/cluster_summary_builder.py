@@ -270,6 +270,12 @@ def _audit_rollup(audit: dict) -> dict:
 
 
 def _truth_rollup(truth: dict) -> dict:
+    """writer_truth_check 报告 → cluster 摘要 truth_check 段。
+
+    `ending_type_advisory` 非空 = 作者标的是自由文学标签（不在 detector 分类法内），
+    ending_type_match=False 只是两套标签体系不同法比对，不是事实不符：必须随记录落库，
+    cross_cluster_engagement_metrics_aggregate 据它把该 cluster 排除出 mismatch 统计。
+    """
     return {
         "verdict": truth.get("verdict"),
         "lie_count": truth.get("lie_count", 0),
@@ -278,6 +284,7 @@ def _truth_rollup(truth: dict) -> dict:
         "declared_ending_type": truth.get("declared_ending_type"),
         "detected_ending_type": truth.get("detected_ending_type"),
         "ending_type_match": truth.get("ending_type_match"),
+        "ending_type_advisory": truth.get("ending_type_advisory"),
         "body_cjk_count": truth.get("body_cjk_count"),
     }
 

@@ -91,8 +91,10 @@ def test_auto_post_reflect_cluster_collects_data_flywheel(monkeypatch, tmp_path)
         "new_issues_this_round": [],
     }, ensure_ascii=False), encoding="utf-8")
     (brief_dir / "cluster_001_validator.json").write_text(json.dumps({
-        "version": 1,
-        "chapter_path": "章节/cluster_001_draft/cluster_001_draft.txt",
+        "version": 2,
+        "carrier": "cluster",
+        "cluster_id": "cluster_001",
+        "draft_path": "章节/cluster_001_draft/cluster_001_draft.txt",
         "checker": "novel-validator-checker",
         "violations": [{
             "line_start": 1,

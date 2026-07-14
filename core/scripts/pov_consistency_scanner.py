@@ -5,7 +5,7 @@
 
 v2 cluster 化方案 Phase 3（2026-05-28）·
 检测主第三人称限知视角在 cluster 不同场景的连贯性：
-  · 默认 POV 是主角（人物卡 role=主角）
+  · 默认 POV 是主角（`protagonist_lookup` 多源反查：人物卡主角位 → 角色弧线 → 事件簇 → 角色池）
   · 单场景内 POV 切换 → 警告（head-hopping）
   · 跨场景 POV 切换 → 必须在场景边界（\n---\n）
 
@@ -24,6 +24,10 @@ import json
 import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import protagonist_lookup  # noqa: E402
 
 
 def load(p: Path):
@@ -217,18 +221,19 @@ def scan(project_root: Path, draft_path: Path) -> dict:
     cards = load(project_root / "_数据库" / "人物卡.json").get("characters", [])
     # 取所有角色名
     character_names = set()
-    protag = None
     for c in cards:
         name = c.get("name", "")
         if name:
             character_names.add(name)
             for a in (c.get("aliases") or []):
                 character_names.add(a)
-        if c.get("role") == "主角" and not protag:
-            protag = name
 
+    # 主角走全仓唯一反查（人物卡主角位 → 角色弧线 → 事件簇 → 角色池），不做 role 精确匹配
+    protag_detail = protagonist_lookup.resolve_protagonist_detail(project_root)
+    protag = protag_detail["name"]
     if not protag:
-        return {"_fatal": "未找到主角（role='主角'）"}
+        return {"_fatal": f"未找到主角（{protagonist_lookup.CANONICAL_ROLE_HINT}）"}
+    character_names.add(protag)
 
     scenes = split_scenes(text)
     scene_povs = []  # [(scene_idx, dominant_pov, runner_up)]
@@ -286,6 +291,7 @@ def scan(project_root: Path, draft_path: Path) -> dict:
         "cluster_mode": True,
         "gate_level": "advisory",
         "protagonist": protag,
+        "protagonist_source": protag_detail["source"],
         "scenes_scanned": len(scenes),
         "scenes_with_pov_signal": len(scene_povs),
         "head_hopping_count": len(head_hopping),

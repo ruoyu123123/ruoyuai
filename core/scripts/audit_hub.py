@@ -42,21 +42,35 @@
 【报告 JSON 结构】_数据库/.audit/ch_NNN_audit.json
   {
     schema_version, chapter, ts, verdict(pass/auto_fixed/needs_agent/fixable_pending/waived),
+    audit_complete: bool,          # 本次审计是否所有 scanner 都产出了结果
+    audit_completeness: {          # 完整性明细（信息透明化·北极星⑤·不改 verdict/不阻断）
+      complete, scanners_total, scanners_ok, scanners_failed,
+      failed_scanners: [ {scanner, exit_code, reason(timeout/exec_error/cli_contract/nonzero_exit)} ],
+      note?                        # 不完整时的人读说明（列出失败 scanner）
+    },
     summary: {fatal, error, warning, info, waived, total},
     issues:        [ {dimension, severity, gate_level, code, desc, source, fix_hint,
                       waived, waive_reason, meta_suspect?} ],  # 全部原始问题
     auto_fixed:    [ {dimension, code, desc, action} ],   # --auto-fix 已确定性修掉的
-    pending_agent: [ {dimension, severity, gate_level, code, desc, suggested_agent, fix_brief} ],
+    pending_agent: [ {dimension, severity, gate_level, code, desc, suggested_agent, fix_brief,
+                      waiver_feedback?} ],  # 存在 orphan 豁免时每条派单附「你的 waiver code 无效」反馈
     waived_issues: [ {dimension, gate_level, code, desc, waive_reason} ],  # 被 AI 合理豁免的
+    waiver_audit:  { advisory_total, advisory_waived, waive_rate, blanket_suspected,
+                     repeated_reason_codes, orphan_codes, orphan_suggestions,
+                     present_issue_codes },  # 豁免诚实审计 META（绝不参与 verdict）
     scanner_status:[ {scanner, exit_code, ok} ]
   }
+  🔴 scanner 超时/崩溃/CLI 契约破损 → 其 issue 不进 verdict；audit_complete 如实标记
+  「审计没跑全」，供主代理/用户裁决（advisory scanner 失败绝不阻断流水线·不新增 hard_gate）。
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+from difflib import get_close_matches
 from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -69,6 +83,8 @@ if str(_SCRIPT_DIR) not in sys.path:
 import chapter_io as cio  # noqa: E402
 # cluster 视野下 chapter_end_anchor 限本 cluster 章范围
 import cluster_lookup  # noqa: E402
+# 主角反查唯一真理源（禁止各自写 role 精确匹配）
+import protagonist_lookup  # noqa: E402
 
 # ---- 维度归类：把各校验器的 code 映射到 6 大维度 ----
 # 剧情 / 风格 / 结构 / 伏笔 / 对话 / 节奏
@@ -257,11 +273,10 @@ def _run(cmd: list, env_extra: dict = None, timeout: int = 180) -> tuple:
     timeout: 秒。NN scanner 批推理需要更长(300s)。
     """
     try:
-        import os as _os
         # 强制子进程 UTF-8 输出：否则 GBK 控制台/无 PYTHONIOENCODING 的父环境(如 agent 上下文)下
         # scanner 的 CJK stdout 按本地编码落字节，被这里的 encoding=utf-8 捕获成 mojibake →
         # parse_fn 解析失败静默 issues=[] → 满载重跑时校验器结果被悄悄丢弃却仍出"完整"verdict。
-        env = {**_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
         if env_extra:
             env.update(env_extra)
         p = subprocess.run(cmd, capture_output=True, text=True,
@@ -901,6 +916,49 @@ def _parse_advisories_scanner(stdout: str, source: str, default_code: str, dimen
 
 # ============ 工具校准建议：自动豁免 ============
 
+# scanner 非零退出码 → 人类可读失败原因（_run 的哨兵码 + argparse 约定）
+_SCANNER_FAILURE_REASON = {
+    99: "timeout",           # _run: subprocess.TimeoutExpired
+    98: "exec_error",        # _run: 启动/IO 异常
+    2: "cli_contract",       # argparse 拒绝 argv（未知选项/缺值/多余位置参数）
+}
+
+
+def _compute_audit_completeness(scanner_status: list) -> dict:
+    """审计完整性透明化：哪些 scanner 没产出结果，它们的 issue 没进 verdict。
+
+    scanner 超时/崩溃/CLI 契约破损时其 issue 不进 all_issues，但 verdict 只看残留 issue
+    → 「跑挂了一半」和「本来就干净」在 verdict 上长得一模一样。本函数把这个差异抬到报告
+    顶层（audit_complete / audit_completeness），让主代理和用户一眼看见「这次审计没跑全」。
+
+    🔴 北极星⑤边界：这是【信息透明化】不是门禁。advisory scanner 挂了不阻断流水线、
+    不产 hard_gate、不改 verdict —— 只是把「审计覆盖度」如实报出来供人裁决。
+    """
+    failed = [s for s in scanner_status if not s.get("ok")]
+    total = len(scanner_status)
+    out = {
+        "complete": not failed,
+        "scanners_total": total,
+        "scanners_ok": total - len(failed),
+        "scanners_failed": len(failed),
+        "failed_scanners": [
+            {
+                "scanner": s.get("scanner"),
+                "exit_code": s.get("exit_code"),
+                "reason": _SCANNER_FAILURE_REASON.get(s.get("exit_code"), "nonzero_exit"),
+            }
+            for s in failed
+        ],
+    }
+    if failed:
+        names = ", ".join(str(s.get("scanner")) for s in failed)
+        out["note"] = (
+            f"审计不完整：{len(failed)}/{total} 个 scanner 未产出结果，"
+            f"其 issue 未计入 verdict（{names}）"
+        )
+    return out
+
+
 def _load_calibration_suggestions(project_root: Path) -> list[dict]:
     """读 写作经验.json 的 tool_calibration_suggestions，让 audit_hub 自动豁免反复出现的 code。
 
@@ -1048,7 +1106,9 @@ def _apply_waivers(all_issues: list, waivers: list) -> list:
 
     🔴 豁免诚实审计：orphan 豁免（code 不在本次任何 issue 里）从 by_code 排除并 log——
     把「凭空豁免不存在的 code」显性化（orphan 本就匹配不到 issue，排除行为中性）。apply-moment 的
-    blanket / orphan 量化信号在 _compute_waiver_audit 里统一算（META-only · 不在此翻 verdict）。"""
+    blanket / orphan 量化信号在 _compute_waiver_audit 里统一算（META-only · 不在此翻 verdict）；
+    orphan 的响亮化出口在摘要 [WARN] 块（_orphan_waiver_warning_lines）与 pending_agent 的
+    waiver_feedback（_orphan_waiver_feedback），本处只留检测时刻的 stderr 痕迹。"""
     if not waivers:
         return []
     issue_codes = {i.get("code", "") for i in all_issues}
@@ -1085,6 +1145,10 @@ def _compute_waiver_audit(all_issues: list, waivers: list, waived_issues: list) 
       - advisory 豁免率 waive_rate > _WAIVER_BLANKET_RATE
       - 单一 reason 串映射 >= _WAIVER_BLANKET_REASON_K 个 distinct code（同理由刷多 code）
     orphan_codes：豁免了本次 issue 里不存在的 code（与 _apply_waivers 同口径重算）。
+    orphan_suggestions：每个 orphan code → 最接近的真实 issue code（difflib 近似匹配；
+      writer 常见错误是把真实 code 拼错/编造，给出纠正建议供反馈闭环）。
+    present_issue_codes：本次真实存在的全部 issue code（供「你的 waiver 无效，
+      真实 codes 是 […]」反馈落到控制台 + dispatch payload）。
     """
     issue_codes = {i.get("code", "") for i in all_issues}
     # advisory 总数 = 非 hard_gate 的 issue（hard_gate 不可豁免，不进豁免分母）
@@ -1105,6 +1169,11 @@ def _compute_waiver_audit(all_issues: list, waivers: list, waived_issues: list) 
         if len(codes) >= _WAIVER_BLANKET_REASON_K
     }
     orphan_codes = sorted({w["code"] for w in waivers} - issue_codes)
+    present_issue_codes = sorted(c for c in issue_codes if c)
+    orphan_suggestions = {
+        c: next(iter(get_close_matches(c, present_issue_codes, n=1, cutoff=0.4)), None)
+        for c in orphan_codes
+    }
     blanket_suspected = (waive_rate > _WAIVER_BLANKET_RATE) or bool(repeated_reason_codes)
     return {
         "advisory_total": advisory_total,
@@ -1113,7 +1182,50 @@ def _compute_waiver_audit(all_issues: list, waivers: list, waived_issues: list) 
         "blanket_suspected": blanket_suspected,
         "repeated_reason_codes": repeated_reason_codes,
         "orphan_codes": orphan_codes,
+        "orphan_suggestions": orphan_suggestions,
+        "present_issue_codes": present_issue_codes,
     }
+
+
+def _orphan_waiver_warning_lines(waiver_audit: dict) -> list:
+    """orphan 豁免响亮化：控制台 [WARN] 块行（无 orphan → 空列表）。
+
+    豁免协议的静默失效通道可观测化——writer 豁免了不存在的 code 时，一行淹没在
+    scanner 输出里的 log 不够，摘要出口必须显著回显「该豁免从未生效 + 建议的真实 code」。
+    🔴 北极星⑤：信息透明化，不改 verdict、不阻断、不新增 hard_gate。
+    """
+    orphan_codes = (waiver_audit or {}).get("orphan_codes") or []
+    if not orphan_codes:
+        return []
+    suggestions = waiver_audit.get("orphan_suggestions") or {}
+    present = waiver_audit.get("present_issue_codes") or []
+    lines = [f"[WARN] 豁免失效（orphan）：{len(orphan_codes)} 条 waiver 的 code "
+             f"不在本次任何 issue 里，这些豁免从未生效："]
+    for c in orphan_codes:
+        s = suggestions.get(c)
+        hint = f"最接近的真实 code: {s}" if s else "无近似的真实 code"
+        lines.append(f"[WARN]   {c} → 该豁免从未生效（{hint}）")
+    lines.append(f"[WARN]   本次真实 issue codes: [{', '.join(present)}]" if present
+                 else "[WARN]   本次没有任何 issue —— 无需豁免")
+    return lines
+
+
+def _orphan_waiver_feedback(waiver_audit: dict) -> str:
+    """orphan 豁免的 dispatch 反馈文本（无 orphan → 空串）。
+
+    附到每条 pending_agent 的 waiver_feedback 字段，让 validator-checker / writer
+    在派单 payload 里直接看到「你的 waiver code 无效 + 本次真实 issue codes」。
+    """
+    orphan_codes = (waiver_audit or {}).get("orphan_codes") or []
+    if not orphan_codes:
+        return ""
+    suggestions = waiver_audit.get("orphan_suggestions") or {}
+    parts = [f"{c}（建议改用: {suggestions[c]}）" if suggestions.get(c) else c
+             for c in orphan_codes]
+    present = waiver_audit.get("present_issue_codes") or []
+    return (f"你的 waiver code 无效（orphan·从未生效）: {'; '.join(parts)}。"
+            f"本次真实 issue codes 是 [{', '.join(present)}]，"
+            f"豁免必须引用真实存在的 advisory code（hard_gate 不可豁免）。")
 
 
 # ============ 修复决策 ============
@@ -1152,20 +1264,9 @@ def _check_character_arc_drift(project_root: Path, ch: int) -> list:
     if arc_dir is None:
         return issues
 
-    # 3. 找主角名（从人物卡.json）
-    protagonist = None
-    chars_path = project_root / "_数据库" / "人物卡.json"
-    if chars_path.exists():
-        try:
-            cd = json.loads(chars_path.read_text(encoding="utf-8"))
-            for name, info in cd.items() if isinstance(cd, dict) else []:
-                if isinstance(info, dict) and (info.get("role") == "protagonist" or info.get("is_protagonist")):
-                    protagonist = name
-                    break
-            if not protagonist and isinstance(cd, dict):
-                protagonist = next(iter(cd.keys()), None)
-        except (json.JSONDecodeError, ValueError):
-            pass
+    # 3. 找主角名（protagonist_lookup 全仓唯一真理源：人物卡 characters 是 list，
+    #    多源兜底 人物卡→角色弧线→character_arc_state→事件簇→角色池；解析不出不猜）
+    protagonist = protagonist_lookup.resolve_protagonist(project_root)
     if not protagonist:
         return issues
 
@@ -3291,8 +3392,12 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
         )
         return name, code, code in ok_set, issues, telemetry
 
-    # 并行执行，结果按 submit 顺序读取（保证 scanner_status 顺序）
-    with ThreadPoolExecutor(max_workers=len(tasks)) as pool:
+    # 并行执行，结果按 submit 顺序读取（保证 scanner_status 顺序）。
+    # 🔴 池宽度用 CPython ThreadPoolExecutor 自身的默认启发式 min(32, cpu+4)，不按 len(tasks) 满开：
+    # cluster 模式满载 ~180 个 scanner 子进程同时起飞会把 NN daemon 打到排队超时（exit 99），
+    # 超时 scanner 的 issue 不进 verdict —— 审计结果被并发压力悄悄削薄。
+    max_workers = min(32, (os.cpu_count() or 8) + 4)
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(_exec_one, t) for t in tasks]
         persona_drift = {}
         for fut in futures:
@@ -3460,6 +3565,13 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
             })
             _pending_codes.add(issue.get("code"))
 
+    # 🔴 orphan 豁免响亮化：waiver code 从未生效时，反馈随每条 dispatch payload 下发，
+    # 让被派的 validator-checker / writer 直接收到「你的 waiver code 无效 + 真实 codes」。
+    orphan_feedback = _orphan_waiver_feedback(waiver_audit)
+    if orphan_feedback:
+        for p in pending_agent:
+            p["waiver_feedback"] = orphan_feedback
+
     # pending_agent 区分：真需派 agent / 仅"可 --auto-fix"提示
     real_pending = [p for p in pending_agent if p.get("suggested_agent")]
 
@@ -3479,12 +3591,20 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     else:
         verdict = "needs_agent" if (fatal or error) else "pass"
 
+    # 🔴 审计完整性透明化：把「N 个 scanner 未产出结果」抬到报告顶层。
+    # 超时/崩溃 scanner 的 issue 不进 verdict，verdict 层读不出「审计没跑全」——
+    # 本段如实报出覆盖度（信息透明化·北极星⑤：不改 verdict、不阻断、不新增 hard_gate）。
+    audit_completeness = _compute_audit_completeness(scanner_status)
+
     return {
         "schema_version": "1.1",
         "chapter": ch,
         "ts": _ts(),
         "verdict": verdict,
         "_audit_mode": audit_mode,
+        # 顶层布尔 + 明细：主代理/用户一眼看见本次审计是否跑全
+        "audit_complete": audit_completeness["complete"],
+        "audit_completeness": audit_completeness,
         "summary": {"fatal": fatal, "error": error, "warning": warning,
                     "info": info, "waived": waived_count, "total": len(all_issues)},
         "issues": all_issues,
@@ -3511,6 +3631,19 @@ def _write_report(project_root: Path, ch: int, report: dict) -> Path:
     return p
 
 
+def _audit_incomplete_line(report: dict) -> str:
+    """审计不完整告警行（跑全 → 空串）。chapter / cluster 两个控制台出口共用：
+    scanner 挂了 = 其 issue 没进 verdict，必须显式告警（干净 ≠ 跑全）。"""
+    completeness = report.get("audit_completeness") or {}
+    if completeness.get("complete", True):
+        return ""
+    fs = completeness.get("failed_scanners", [])
+    detail = ", ".join(f"{f['scanner']}({f['reason']})" for f in fs)
+    return (f"⚠ 审计不完整: {completeness['scanners_failed']}/"
+            f"{completeness['scanners_total']} 个 scanner 未产出结果，"
+            f"其 issue 未计入结论 [{detail}]")
+
+
 def _print_summary(report: dict, report_path: Path) -> None:
     s = report["summary"]
     verdict_label = {"pass": "全通过", "auto_fixed": "已自动修复",
@@ -3521,6 +3654,9 @@ def _print_summary(report: dict, report_path: Path) -> None:
     print(f"== 第{report['chapter']}章 质检报告 ==")
     print(f"结论: {verdict_label}  |  致命 {s['fatal']} 错误 {s['error']} "
           f"警告 {s['warning']} 豁免 {s.get('waived', 0)}")
+    # orphan 豁免响亮化：豁免了不存在的 code = 该豁免从未生效，摘要显著回显
+    for line in _orphan_waiver_warning_lines(report.get("waiver_audit") or {}):
+        print(line)
     if report.get("waived_issues"):
         print(f"AI 豁免 {len(report['waived_issues'])} 项（顾问制：advisory 项有理由可驳回）：")
         for w in report["waived_issues"]:
@@ -3541,10 +3677,9 @@ def _print_summary(report: dict, report_path: Path) -> None:
         print(f"可 --auto-fix 自动解决 {len(fixable)} 项（本次未修）：")
         for p in fixable:
             print(f"  [~~] [{p['dimension']}/{p['severity']}] {p['code']}: {p['desc'][:45]}")
-    bad_scanners = [s for s in report["scanner_status"] if not s["ok"]]
-    if bad_scanners:
-        print(f"注意: {len(bad_scanners)} 个校验器执行异常 "
-              f"({', '.join(s['scanner'] for s in bad_scanners)})")
+    incomplete_line = _audit_incomplete_line(report)
+    if incomplete_line:
+        print(incomplete_line)
     print(f"报告: {report_path}")
 
 
@@ -3757,6 +3892,13 @@ def main():
             print(f"== cluster_{cluster_key} 质检报告 ==")
             print(f"  verdict: {report.get('verdict', '?')}")
             print(f"  issues:  {len(report.get('issues', []))}")
+            # orphan 豁免响亮化（该豁免从未生效 + 建议真实 code）
+            for line in _orphan_waiver_warning_lines(report.get("waiver_audit") or {}):
+                print(f"  {line}")
+            # 审计完整性：failed scanner 的 issue 未计入 verdict，主代理须在控制台可见
+            incomplete_line = _audit_incomplete_line(report)
+            if incomplete_line:
+                print(f"  {incomplete_line}")
             print(f"  报告: {report_path}")
         if report.get("verdict") == "needs_agent":
             sys.exit(2)

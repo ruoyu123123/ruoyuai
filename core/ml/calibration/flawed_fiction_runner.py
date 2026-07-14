@@ -117,7 +117,7 @@ def run_sample(sample_dir: Path) -> dict:
 
     lf_report = lf.scan(sample_dir, draft)
     dt_report = dt.scan(draft, project_root=sample_dir, cluster_arg="cluster_001")
-    sp_report = sp.scan(draft, project_root=sample_dir, cluster_mode=True)
+    sp_report = sp.scan(draft, project_root=sample_dir, cluster_arg="cluster_001")
 
     num_hit, num_off = _match_numeric(lf_report, gt)
     nli_hit, nli_off, nli_skip = _match_nli(lf_report, gt)

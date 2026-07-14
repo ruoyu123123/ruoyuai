@@ -469,6 +469,8 @@ class ClusterDataCollector:
             return 0
         cluster_key = _cluster_key(self.cluster_id)
         candidates = list(brief_dir.glob(f"cluster_{cluster_key}_*.json"))
+        # ch_NNN_*.json 是 v1 chapter 载体遗留文件名——扫进来只为让下方 v2 契约门
+        # 响亮报出「跳过+重产」提示，不会产出训练样本（v2 carrier=cluster 只有 cluster_ 形态）。
         for ch in _chapter_nums_for_cluster(self.project, self.cluster_id):
             candidates += list(brief_dir.glob(f"ch_{ch:03d}_*.json"))
         records_by_model: dict[str, list[dict]] = {}
@@ -478,11 +480,21 @@ class ClusterDataCollector:
                 brief = json.loads(p.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 continue
-            if not isinstance(brief, dict) or brief.get("version") != 1:
+            if not isinstance(brief, dict):
+                continue
+            # checker brief 统一契约（与 gen_fixer 同口径）：version=2 + carrier=cluster + draft_path。
+            # 非 v2 brief（含旧 version:1 chapter_path 载体）不收——静默 continue 会让
+            # checker-brief 训练样本通道整体无声死亡，这里响亮提示重产。
+            if brief.get("version") != 2 or not brief.get("draft_path"):
+                print(
+                    f"[data_collector] 跳过非 v2 checker brief: {p.name}"
+                    f"（version={brief.get('version')!r}·期望 version:2 + draft_path·"
+                    f"重跑 novel-validator-checker / novel-voice-checker 重产 brief）",
+                    file=sys.stderr)
                 continue
             checker = str(brief.get("checker") or "")
             rel_path = _rel_path(p, self.project)
-            chapter_path = brief.get("chapter_path")
+            draft_path = brief.get("draft_path")
             judge_report = brief.get("judge_report") if isinstance(brief.get("judge_report"), dict) else None
             judge_grade = judge_report.get("overall_grade") if judge_report else None
             judge_confidence = judge_report.get("confidence") if judge_report else None
@@ -503,7 +515,7 @@ class ClusterDataCollector:
                     source,
                     model=model,
                     brief_path=rel_path,
-                    chapter_path=chapter_path,
+                    draft_path=draft_path,
                     checker=checker,
                     line_start=v.get("line_start"),
                     line_end=v.get("line_end"),

@@ -51,7 +51,11 @@ test_location_teleport_blindspot）。本 scanner 用确定性的
   绝不得加入 audit_hub.HARD_GATE_CODES。
 
 CLI:
-  py spatial_continuity_scanner.py <draft_path> --project <root> [--cluster]
+  py spatial_continuity_scanner.py <draft_path> --project <root> [--cluster cluster_<key>]
+
+  --cluster 收 cluster 标识（cluster_001 / 001 / 1 均可·cluster_lookup 权威归一·
+  禁 f"cluster_{ch:03d}" 机械拼接）；缺省时从 draft 路径的 cluster_<key>_draft 推断。
+  与 draft_temporal_order_scanner / scene_receipts_scanner 同一 CLI 约定。
 
 三态开关: env SPATIAL_CONTINUITY_MODE = off / shadow / active(默认·金标准
   10 作者 100 chunk 零误报实测)
@@ -66,10 +70,12 @@ import re
 import sys
 from pathlib import Path
 
+import cluster_lookup
 from atomic_json import load_json
 
 ISSUE_CODE = "SPATIAL_CONTINUITY_TELEPORT"
 _CHANGES_SEPARATORS = ("---CHANGES_FACTUAL---", "---CHANGES---")
+_KEY_FROM_PATH = re.compile(r"cluster_([0-9]{3}[a-z]?)_draft")
 _MIN_CANDIDATE_PAIRS = 2   # 噪声地板：瞬移候选 < 2 对不报（单例噪声）
 _MIN_TERM_LEN = 2          # 启发式地名至少 2 字（裸后缀单字太泛不算地名）
 _BINDING_PROXIMITY = 50    # 绑定就近性：地点提及与角色名间隔 ≤50 字才算身处证据
@@ -166,6 +172,17 @@ def _strip_changes(text: str) -> str:
         if sep in text:
             return text.split(sep)[0].rstrip()
     return text
+
+
+def _resolve_cluster_id(cluster_arg, draft_path) -> str | None:
+    """--cluster 优先（cluster_lookup 权威归一·禁机械拼接）；缺省时从 draft 路径推 key。"""
+    cid = cluster_lookup.normalize_cluster_id(cluster_arg) if cluster_arg else None
+    if cid:
+        return cid
+    m = _KEY_FROM_PATH.search(str(draft_path))
+    if m:
+        return cluster_lookup.normalize_cluster_id(f"cluster_{m.group(1)}")
+    return None
 
 
 def _read_json(path: Path, default):
@@ -428,15 +445,18 @@ def _detect(text: str, characters: list[dict], terms: list[str]) -> dict:
     }
 
 
-def scan(draft_path, project_root=None, cluster_mode: bool = False) -> dict:
+def scan(draft_path, project_root=None, cluster_arg=None) -> dict:
+    """cluster_arg: cluster 标识（cluster_001 / 001 / 1）。缺省时从 draft 路径推断。"""
     mode = _mode()
+    cluster_id = _resolve_cluster_id(cluster_arg, draft_path)
     out = {
         "scanner": "spatial_continuity",
         "schema_version": "1.0",
         "mode": mode,
         "code": ISSUE_CODE,
         "gate_level": "advisory",
-        "cluster_mode": bool(cluster_mode),
+        "cluster_id": cluster_id,
+        "cluster_mode": cluster_id is not None,
         "violations": [],
         "verdict": "PASS",
         "warning": None,
@@ -500,11 +520,10 @@ def main() -> None:
         description="Same-scene spatial continuity teleport scanner (advisory).")
     parser.add_argument("draft_path")
     parser.add_argument("--project", default=None)
-    parser.add_argument("--cluster", action="store_true",
-                        help="cluster 草稿模式标记（仅记录到输出，不改变检测逻辑）")
+    parser.add_argument("--cluster", default=None,
+                        help="cluster 标识（cluster_001 / 001 / 1）；缺省时从 draft 路径推断")
     args = parser.parse_args()
-    cluster_mode = args.cluster or os.environ.get("CLUSTER_MODE") == "1"
-    report = scan(args.draft_path, args.project, cluster_mode=cluster_mode)
+    report = scan(args.draft_path, args.project, cluster_arg=args.cluster)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     sys.exit(1 if report.get("warning") else 0)
 

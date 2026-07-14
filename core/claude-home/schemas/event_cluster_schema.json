@@ -226,6 +226,10 @@
             "default": "linear",
             "description": "叙事顺序：cluster_001 可用 in_medias_res，由 outline 排列 storyboard；其余默认 linear"
           },
+          "narrative_pov_mode": {
+            "type": "string",
+            "description": "叙述 POV 五分类（Stanzel/Cohn consonant-dissonant·与 narrative_mode 时间序正交）。常见取值：first_present / first_retro_consonant / first_retro_dissonant / third_limited / third_omniscient。advisory 工艺项不设 enum 硬锁（北极星⑤）；build_manifest 按 cluster 优先 → 作者档兜底 → third_limited 默认解析"
+          },
           "climax_hint_scene_index": {
             "type": [
               "integer",
@@ -233,6 +237,89 @@
             ],
             "minimum": 0,
             "description": "climax 场景在 scene_storyboard 的下标；splitter 仅记录该提示，不重排正文"
+          },
+          "title": {
+            "type": "string",
+            "description": "cluster 短标题（展示/TOC 用·build_manifest current_scene fallback 读）"
+          },
+          "volume": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "本 cluster 所属卷号（卷=阶段·ME 池标 volume:N 经 emergence 透传·build_manifest 注入 writer）"
+          },
+          "vol": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "卷号（_build_volume_convergence_anchor / current_scene 读·缺失时由 parent_me 推导）"
+          },
+          "is_volume_finale": {
+            "type": "boolean",
+            "description": "本 cluster 是否卷末小走向（true → writer 收 volume_finale_directive 高烈度转折指令）"
+          },
+          "stakes_delta": {
+            "type": "string",
+            "description": "相对前块的强度增量描述（避免同卷小走向平铺重复·build_manifest 透传 writer）"
+          },
+          "belief_update_intent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "末段信念更新意图。常见取值：preserve / update。advisory 软提示不设 enum 硬锁（北极星⑤）"
+          },
+          "event_boundary_sharpness": {
+            "type": "string",
+            "description": "事件边界锐度。常见取值：sharp / dull / default（is_volume_finale=true 时 build_manifest 强制 sharp）。advisory 不设 enum 硬锁"
+          },
+          "intended_burst_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "本 cluster 目标爆点类。常见取值：laughter / shock / grief / anticipation / shipping / awe / critique / callback / meta。advisory 软提示不设 enum 硬锁（北极星⑤）"
+          },
+          "olfactory_anchors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "trigger": {
+                  "type": "string"
+                },
+                "memory_seed": {
+                  "type": "string"
+                },
+                "scene": {
+                  "type": "integer"
+                }
+              }
+            },
+            "description": "嗅觉/味觉触发的非自愿记忆/闪回锚（Proust·advisory）·build_manifest 透传 writer"
+          },
+          "author_signature_slots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "slot_id": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "preserve_policy": {
+                  "type": "string"
+                },
+                "anchor_hint": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "cluster 级作者签名句逐字保留槽（scene 级槽在 scene_storyboard.items.author_signature_slots）·_collect_author_signature_slots 读"
           },
           "scene_storyboard": {
             "type": "array",
@@ -517,6 +604,76 @@
           "draft_path": {
             "type": "string",
             "description": "writer 写的完整 cluster 草稿路径 (splitter 切前)"
+          },
+          "chapter_range": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "输出层写回：splitter 切完后回填的物理章区间 [start, end]。规划层禁写（v27 fluid·章数由 splitter 决定）；cluster_choice_apply 对新 brief 主动剥除，emergence/build_manifest 只读已回填值"
+          },
+          "locked_facts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fact": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "本 cluster 落定的硬事实（producer: apply_archive.apply_locked_facts·consumer: character_belief_ledger_scanner / locked_fact 类 scanner）"
+          },
+          "throughline_progress": {
+            "type": "object",
+            "properties": {
+              "OS": {
+                "type": "boolean"
+              },
+              "MC": {
+                "type": "boolean"
+              },
+              "IC": {
+                "type": "boolean"
+              },
+              "RS": {
+                "type": "boolean"
+              }
+            },
+            "description": "Dramatica 4 线本块推进标记（producer: apply_archive·consumer: cross_cluster_throughline_balance_aggregate）"
+          },
+          "source_contract": {
+            "type": "object",
+            "description": "outline-planner 详化时记录的输入契约（project/style_lib/research 引用）"
+          },
+          "user_choices_required": {
+            "type": "boolean",
+            "description": "本 brief 是否还有待用户裁决的走向选项（outline-planner 写）"
+          },
+          "detailed_cluster": {
+            "type": "object",
+            "description": "outline-planner 详化产物的完整 brief 内嵌副本"
+          },
+          "in_medias_res_note": {
+            "type": "string",
+            "description": "cluster_001 倒叙 storyboard 排列说明（outline-planner 写·供 writer/审计理解场景顺序设计）"
+          },
+          "mode": {
+            "type": "string",
+            "description": "brief 产出形态标记（如 ecas_cluster_brief）"
+          },
+          "next_step": {
+            "type": "string",
+            "description": "brief 落库后的下一步操作提示（outline-planner 写）"
+          },
+          "_schema": {
+            "type": "string",
+            "description": "brief 内嵌 schema 版本标记（如 cluster_001_detailed_brief_v1）"
           },
           "spawned_at": {
             "type": "string",

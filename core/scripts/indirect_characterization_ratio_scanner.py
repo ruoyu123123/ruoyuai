@@ -100,35 +100,32 @@ def _strip_changes(text: str) -> str:
 
 
 from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
+import protagonist_lookup  # noqa: E402 主角反查单一真理源
 
 
 def _load_protagonist_and_cast(project_root):
-    """返回 (protag_name, side_chars_set)"""
-    protag = None
+    """返回 (protag_name, side_chars_set)·主角走 protagonist_lookup 唯一反查，其余角色进配角集。"""
     side = set()
     if not project_root:
-        return protag, side
+        return None, side
     p = Path(project_root) / "_数据库" / "人物卡.json"
     if not p.exists():
-        return protag, side
+        return None, side
     try:
         obj = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return protag, side
+        return None, side
+    protag = protagonist_lookup.resolve_protagonist(project_root)
     for c in (obj.get("characters", []) if isinstance(obj, dict) else []):
         if not isinstance(c, dict):
             continue
         nm = c.get("name", "")
-        if not nm:
+        if not nm or nm == protag:
             continue
-        role = c.get("role", "")
-        if role == "主角" and protag is None:
-            protag = nm
-        else:
-            side.add(nm)
-            for a in (c.get("aliases") or []):
-                if a:
-                    side.add(a)
+        side.add(nm)
+        for a in (c.get("aliases") or []):
+            if a:
+                side.add(a)
     return protag, side
 
 

@@ -135,7 +135,7 @@
   "skeletons": {
     "人物卡": {
       "schema_version": "v27",
-      "_doc": "角色卡 · build_manifest 按 scene_storyboard[].characters 加载 · item 必需 id/name/role · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema · 🔴 2026-07-07 A7 辨识锚点分层+负面事实清单见 _recognition_schema",
+      "_doc": "角色卡 · build_manifest 按 scene_storyboard[].characters 加载 · item 必需 id/name/role · 🔴 主角卡 role 必须以「主角」开头（如 \"主角\" 或 \"主角·<自由描述>\"）——全仓主角反查(protagonist_lookup)+pov/结构/风格 scanner 的公共基线，free-text role 不以「主角」开头会被 db_schema_validate 判 PROTAGONIST_ROLE_NOT_CANONICAL 契约错误 · 🔴 2026-06-28 写手信息隔离见 _writer_isolation_schema · 🔴 2026-07-07 A7 辨识锚点分层+负面事实清单见 _recognition_schema",
       "consumption": {
         "layer": "direct_inject",
         "by": [

@@ -133,6 +133,23 @@ def test_helpers_keep_cluster_semantics():
     ) == [{"code": "X", "reason": "same"}, {"code": "Y", "reason": "other"}]
 
 
+def test_truth_rollup_carries_ending_type_advisory():
+    """G4①回归锁：writer_truth_check 的 ending_type_advisory 随 rollup 落库（非孤儿字段）。"""
+    advisory = {"field": "applied_style.ending_type",
+                "declared": "死兆留白钩", "actual": "场景硬收",
+                "note": "作者自由文学标签"}
+    rollup = builder._truth_rollup({
+        "verdict": "pass",
+        "ending_type_match": False,
+        "ending_type_advisory": advisory,
+        "detected_ending_type": "场景硬收",
+    })
+    assert rollup["ending_type_advisory"] == advisory
+    assert rollup["ending_type_match"] is False
+    # 无 advisory 时字段为 None（不缺键·下游可安全读取）
+    assert builder._truth_rollup({"verdict": "pass"})["ending_type_advisory"] is None
+
+
 def test_build_cluster_record_requires_all_cluster_artifacts(tmp_path):
     project = _prepare_project(tmp_path)
     record = builder.build_cluster_record(project, "001")

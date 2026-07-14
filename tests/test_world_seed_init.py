@@ -118,6 +118,49 @@ def test_seed_adds_rules_and_baselines():
         assert alive["expected_complete_cluster"] is None  # 在世角色不预设结局
 
 
+def test_seed_no_protagonist_signal_does_not_guess_first_key(capsys):
+    """回归锁：character_arc_state 无显式主角位且 protagonist_lookup 反查不出 →
+    不猜第一个 key（旧 fallback 反模式），跳过 protagonist/NPC thread 播种并响亮提示。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), arc={"characters": {
+            "甲": {"status": "alive", "role": "掮客",
+                   "current_stage_at_cluster": "cluster_001:走私"},
+            "乙": {"status": "alive", "role": "战士",
+                   "current_stage_at_cluster": "cluster_001:护卫"},
+        }})
+        r = wsi.seed(tmp, explicit_factions=["阵营X"], force=False,
+                     reset_ticks=False, dry_run=False)
+        err = capsys.readouterr().err
+        assert "解析不出" in err and "不猜" in err
+        assert r["protagonist"] == ""
+        assert r["protagonist_seeded"] is False
+        # 主角身份未定 → 不播 NPC thread（防真主角被误播成幕后 NPC）
+        assert r["threads_seeded"] == []
+        # 其余播种（规则/势力）不受影响
+        assert "RR_AUTO_TICK_BASE" in r["rules_added"]
+        assert "阵营X" in r["factions_seeded"]
+
+
+def test_seed_protagonist_resolved_via_lookup_fallback():
+    """arc 无显式主角位但人物卡有主角卡且名字命中 arc key → 经 protagonist_lookup
+    单一真理源反查解析成功（非瞎猜）。"""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = _mk_project(Path(d), arc={"characters": {
+            "沈砚": {"status": "alive", "role": "掮客",
+                     "current_stage_at_cluster": "cluster_001:开荒"},
+            "盟友丙": {"status": "alive", "role": "战士",
+                       "current_stage_at_cluster": "cluster_001:护卫"},
+        }})
+        _w(tmp / "_数据库" / "人物卡.json",
+           {"characters": [{"name": "沈砚", "role": "主角"}]})
+        r = wsi.seed(tmp, explicit_factions=[], force=False,
+                     reset_ticks=False, dry_run=False)
+        assert r["protagonist"] == "沈砚"
+        assert r["protagonist_seeded"] is True
+        assert "盟友丙" in r["threads_seeded"]
+        assert "沈砚" not in r["threads_seeded"]
+
+
 def test_seed_requires_precreated_core_databases():
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

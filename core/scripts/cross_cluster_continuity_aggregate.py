@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cluster_summary_reader as csr
+import protagonist_lookup
 from atomic_json import load_json
 from continuity_keywords import extract_keywords
 
@@ -28,20 +29,8 @@ def _read_json(path: Path, default=None):
 
 
 def get_protagonist(project_root: Path) -> str | None:
-    """读取 canonical 人物卡中的主角名称。"""
-    cards = _read_json(project_root / "_数据库" / "人物卡.json", {}) or {}
-    characters = cards.get("characters")
-    if not isinstance(characters, list):
-        return None
-    for character in characters:
-        if isinstance(character, dict) and (
-            character.get("role") in ("主角", "protagonist")
-            or character.get("is_protagonist") is True
-        ):
-            name = character.get("name")
-            if isinstance(name, str) and name:
-                return name
-    return None
+    """主角名（protagonist_lookup 唯一反查）。"""
+    return protagonist_lookup.resolve_protagonist(project_root)
 
 
 def _cluster_draft_path(project_root: Path, cluster_id: str) -> Path:

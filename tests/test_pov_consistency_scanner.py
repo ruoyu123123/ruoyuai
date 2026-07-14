@@ -161,7 +161,7 @@ def test_scan_fatal_missing_draft():
 
 
 def test_scan_fatal_no_protagonist():
-    """人物卡无 role='主角' → _fatal。"""
+    """人物卡无任何主角位（全配角）→ _fatal。"""
     with tempfile.TemporaryDirectory() as d:
         proj = _mk_project(Path(d), [
             {"name": SIDE, "role": "配角"},
@@ -171,6 +171,50 @@ def test_scan_fatal_no_protagonist():
         report = pov.scan(proj, draft)
         assert "_fatal" in report, report
         assert "主角" in report["_fatal"], report
+
+
+def test_scan_resolves_protagonist_from_freetext_role():
+    """G4②回归锁：role 是自由文学描述（含「主角」但不等于「主角」）也能反查出主角，不 _fatal 空跑。
+
+    实证：长恨_e2e 的 role="炎帝幼女·…（日后化精卫的执念主角之一）" 精确匹配 role=='主角' 会落空。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d), [
+            {"name": PROTAG, "role": "炎帝幼女·不甘认命的刚烈幼妹（日后化精卫的执念主角之一）"},
+            {"name": SIDE, "role": "配角"},
+        ])
+        draft = _write_draft(proj, f"{PROTAG}想着心事。")
+        report = pov.scan(proj, draft)
+        assert "_fatal" not in report, report
+        assert report["protagonist"] == PROTAG, report
+        assert report["protagonist_source"] == "人物卡.json", report
+
+
+def test_scan_resolves_protagonist_from_canonical_prefix_role():
+    """G4②回归锁：canonical 形态 role="主角·<描述>" 解析出主角（前缀契约）。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d), [
+            {"name": PROTAG, "role": "主角·守夜人"},
+            {"name": SIDE, "role": "反派"},
+        ])
+        draft = _write_draft(proj, f"{PROTAG}察觉到不对劲。")
+        report = pov.scan(proj, draft)
+        assert "_fatal" not in report, report
+        assert report["protagonist"] == PROTAG, report
+
+
+def test_scan_falls_back_to_event_cluster_protagonist():
+    """G4②回归锁：人物卡无主角位时，事件簇.protagonist 兜底解析。"""
+    with tempfile.TemporaryDirectory() as d:
+        proj = _mk_project(Path(d), [{"name": SIDE, "role": "配角"}])
+        (proj / "_数据库" / "事件簇.json").write_text(
+            json.dumps({"protagonist": PROTAG, "clusters": []}, ensure_ascii=False),
+            encoding="utf-8")
+        draft = _write_draft(proj, f"{SIDE}走了。{PROTAG}想着往事。")
+        report = pov.scan(proj, draft)
+        assert "_fatal" not in report, report
+        assert report["protagonist"] == PROTAG, report
+        assert report["protagonist_source"] == "事件簇.json", report
 
 
 # ══════════════════════════════════════════════════════════════════════════

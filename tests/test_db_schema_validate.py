@@ -61,6 +61,59 @@ def test_cli_rejects_unknown_write_flag():
         raise AssertionError("未声明的写盘参数必须被 argparse 拒绝")
 
 
+# ============ G4② 人物卡 canonical 主角位契约 ============
+def _write_cards(db: Path, characters: list) -> None:
+    (db / "人物卡.json").write_text(
+        json.dumps({"schema_version": 1, "characters": characters}, ensure_ascii=False),
+        encoding="utf-8")
+
+
+def test_protagonist_contract_error_on_freetext_role():
+    """role 是自由文学描述（不以「主角」开头）→ PROTAGONIST_ROLE_NOT_CANONICAL 契约错误。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_cards(db, [
+            {"id": "C_1", "name": "女娃", "role": "炎帝幼女·执念主角之一"},
+            {"id": "C_2", "name": "瑶姬", "role": "配角"},
+        ])
+        errs = dsv.check_protagonist_contract(db)
+        assert any("PROTAGONIST_ROLE_NOT_CANONICAL" in e for e in errs), errs
+        # 多源兜底仍报出解析到的名字，帮助定位
+        assert any("女娃" in e for e in errs), errs
+
+
+def test_protagonist_contract_passes_canonical_role():
+    """canonical 主角位（role 以「主角」开头）→ 无契约错误。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_cards(db, [
+            {"id": "C_1", "name": "女娃", "role": "主角·炎帝幼女·执念主角之一"},
+            {"id": "C_2", "name": "瑶姬", "role": "配角"},
+        ])
+        assert dsv.check_protagonist_contract(db) == []
+
+
+def test_protagonist_contract_empty_cards_no_error():
+    """characters 为空（fluid 骨架·角色未涌现）→ 合法稀疏·不报。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_cards(db, [])
+        assert dsv.check_protagonist_contract(db) == []
+
+
+def test_protagonist_contract_wired_into_post_edit():
+    """--post-edit 人物卡 非 canonical 主角位 → revalidate_after_manual exit 2。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_cards(db, [{"id": "C_1", "name": "女娃", "role": "执念主角之一"}])
+        rc = dsv.revalidate_after_manual(db / "人物卡.json")
+        assert rc == 2
+
+
 # ============ C19 大势卡结构契约 ============
 def _mk_db(td) -> Path:
     db = Path(td) / "_数据库"
@@ -204,6 +257,66 @@ def test_c02_story_destiny_empty_strings_count_as_empty():
     assert dsv._has_content({"final_image": "末法纪"}) is True
     assert dsv._has_content([]) is False
     assert dsv._has_content([{"x": "y"}]) is True
+
+
+# ============ --report-out 确定性校验报告（cluster-save-state step1 产物） ============
+_REPORT_REQUIRED_KEYS = ("command", "project", "result", "errors_count",
+                         "warnings_count", "errors", "warnings", "generated_at")
+
+
+def test_write_validation_report_produces_valid_json_pass_shape():
+    """write_validation_report 落盘合法 JSON，含全部契约键，pass 形态正确。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "某书"
+        report_path = root / "_数据库" / ".wal" / "cluster_001_schema_validate.json"
+        dsv.write_validation_report(report_path, root, [], ["[W] 某 advisory"])
+        obj = json.loads(report_path.read_text(encoding="utf-8"))
+        for k in _REPORT_REQUIRED_KEYS:
+            assert k in obj, f"报告缺契约键 {k}"
+        assert obj["result"] == "pass" and obj["errors_count"] == 0
+        assert obj["warnings_count"] == 1 and obj["command"] == "db_schema_validate"
+        assert obj["generated_at"]
+
+
+def test_report_out_written_even_on_fail_and_exit_code_kept(monkeypatch, capsys):
+    """校验失败时报告照写（result=fail），退出码语义不变（仍 exit 1 阻断）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "某书"
+        (root / "_数据库").mkdir(parents=True)
+        monkeypatch.setattr(sys, "argv", [
+            "db_schema_validate.py", str(root),
+            "--report-out", "_数据库/.wal/cluster_002_schema_validate.json"])
+        try:
+            dsv.main()
+        except SystemExit as exc:
+            assert exc.code == 1, "空库必有 MISSING 错误 → exit 1"
+        else:
+            raise AssertionError("空库校验必须 exit 1")
+        report_path = root / "_数据库" / ".wal" / "cluster_002_schema_validate.json"
+        obj = json.loads(report_path.read_text(encoding="utf-8"))
+        assert obj["result"] == "fail" and obj["errors_count"] > 0
+        assert obj["errors_count"] == len(obj["errors"])
+
+
+def test_report_out_rejected_outside_full_validation_mode(monkeypatch, capsys):
+    """--report-out 只属于全库校验模式；与 --post-edit / --require-quantitative-keys 组合 → 响亮 exit 2。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        combos = (
+            ["db_schema_validate.py", str(root), "--post-edit", str(root / "x.json"),
+             "--report-out", "r.json"],
+            ["db_schema_validate.py", str(root), "--require-quantitative-keys",
+             "--report-out", "r.json"],
+        )
+        for argv in combos:
+            monkeypatch.setattr(sys, "argv", argv)
+            try:
+                dsv.main()
+            except SystemExit as exc:
+                assert exc.code == 2, argv
+            else:
+                raise AssertionError(f"{argv} 必须 exit 2")
+            assert not (root / "r.json").exists(), "非全库校验模式不得写报告"
 
 
 if __name__ == "__main__":

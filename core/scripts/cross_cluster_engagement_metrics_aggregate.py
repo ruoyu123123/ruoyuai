@@ -51,6 +51,7 @@ def collect_cluster_metrics(records: list[dict]) -> dict:
         "truth_checks": 0,
         "truth_failures": 0,
         "ending_type_mismatches": 0,
+        "ending_type_advisories": [],
     }
     for record in records:
         cluster_id = str(record["cluster_id"])
@@ -81,9 +82,40 @@ def collect_cluster_metrics(records: list[dict]) -> dict:
             metrics["truth_checks"] += 1
             if str(truth.get("verdict") or "").lower() not in ("pass", "ok"):
                 metrics["truth_failures"] += 1
+            # ending_type_advisory 非空 = 作者标自由文学标签，detector 有限分类法无法同法比对
+            # （writer_truth_check 已判定非事实谎）→ 不计 mismatch，单列 advisory 口径。
+            advisory = truth.get("ending_type_advisory")
             if truth.get("ending_type_match") is False:
-                metrics["ending_type_mismatches"] += 1
+                if isinstance(advisory, dict) and advisory:
+                    metrics["ending_type_advisories"].append({
+                        "cluster_id": cluster_id,
+                        "declared": advisory.get("declared"),
+                        "detected": advisory.get("actual"),
+                    })
+                else:
+                    metrics["ending_type_mismatches"] += 1
     return metrics
+
+
+def scan_ending_type_advisories(advisories: list[dict]) -> list[dict]:
+    """作者自由文学 ending 标签占比过半 → 提示 detector 分类法与作者标签体系脱节。
+
+    advisory-only：标签体系分歧是作者用词自由（北极星⑤），不是质量缺陷，
+    只在跨 cluster 视野上给一次口径提示，绝不逐 cluster 报 issue。
+    """
+    if len(advisories) < 3:
+        return []
+    return [{
+        "severity": "advisory",
+        "gate_level": "advisory",
+        "code": "ENDING_TYPE_TAXONOMY_DRIFT",
+        "metric": "ending_type_advisory_count",
+        "count": len(advisories),
+        "clusters": [item["cluster_id"] for item in advisories],
+        "declared_labels": sorted({
+            str(item.get("declared") or "") for item in advisories if item.get("declared")
+        }),
+    }]
 
 
 def scan_hook_trend(scores: list[tuple[str, float]]) -> list[dict]:
@@ -212,6 +244,7 @@ def build_report(project_root: Path, last_n: int | None = None) -> dict:
     findings = scan_hook_trend(metrics["hook"])
     findings.extend(scan_golden_trend(metrics))
     findings.extend(scan_cliffhanger_quota(collect_ending_types(records)))
+    findings.extend(scan_ending_type_advisories(metrics["ending_type_advisories"]))
     summary = {
         "warning": sum(item["severity"] == "warning" for item in findings),
         "advisory": sum(item["severity"] == "advisory" for item in findings),
@@ -229,6 +262,7 @@ def build_report(project_root: Path, last_n: int | None = None) -> dict:
             "truth_checks": metrics["truth_checks"],
             "truth_failures": metrics["truth_failures"],
             "ending_type_mismatches": metrics["ending_type_mismatches"],
+            "ending_type_advisories": len(metrics["ending_type_advisories"]),
         },
         "findings": findings,
         "summary": summary,

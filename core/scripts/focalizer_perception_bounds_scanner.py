@@ -86,10 +86,11 @@ def _strip_changes(text: str) -> str:
 
 
 from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
+import protagonist_lookup  # noqa: E402 主角反查单一真理源
 
 
 def _load_focalizer_names(project_root):
-    """读人物卡找主角名（聚焦人默认主角）+ 所有角色名集合（用于他人内心识别）。"""
+    """主角名（聚焦人默认主角·protagonist_lookup 唯一反查）+ 所有角色名集合（用于他人内心识别）。"""
     if not project_root:
         return None, set()
     p = Path(project_root) / "_数据库" / "人物卡.json"
@@ -101,7 +102,6 @@ def _load_focalizer_names(project_root):
         return None, set()
     chars = obj.get("characters", []) if isinstance(obj, dict) else []
     all_names = set()
-    protag = None
     for c in chars:
         if not isinstance(c, dict):
             continue
@@ -111,8 +111,9 @@ def _load_focalizer_names(project_root):
             for a in (c.get("aliases") or []):
                 if a:
                     all_names.add(a)
-        if c.get("role") == "主角" and not protag:
-            protag = n
+    protag = protagonist_lookup.resolve_protagonist(project_root)
+    if protag:
+        all_names.add(protag)
     return protag, all_names
 
 

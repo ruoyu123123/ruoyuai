@@ -33,10 +33,11 @@ def _write(db: Path, name: str, obj) -> Path:
 
 # ============ 结构契约（SCHEMA_RULES）============
 def test_chars_list_ok():
-    """良构人物卡（characters 是 list）→ exit 0。"""
+    """良构人物卡（characters 是 list · canonical 主角位 role 以「主角」开头）→ exit 0。"""
     with tempfile.TemporaryDirectory() as td:
         p = _write(Path(td) / "_数据库", "人物卡",
-                   {"schema_version": 1, "characters": [{"id": "x", "name": "魏无咎", "role": "主"}]})
+                   {"schema_version": 1,
+                    "characters": [{"id": "x", "name": "魏无咎", "role": "主角"}]})
         assert dsv.revalidate_after_manual(p) == 0
 
 
@@ -189,7 +190,7 @@ def test_cli_revalidate_alias_passes():
     """CLI --revalidate-after-manual 别名透传：良构文件 → sys.exit(0)。"""
     with tempfile.TemporaryDirectory() as td:
         p = _write(Path(td) / "_数据库", "人物卡",
-                   {"schema_version": 1, "characters": [{"id": "x", "name": "a", "role": "主"}]})
+                   {"schema_version": 1, "characters": [{"id": "x", "name": "a", "role": "主角"}]})
         old = sys.argv
         sys.argv = ["db_schema_validate.py", td, "--revalidate-after-manual", str(p)]
         try:

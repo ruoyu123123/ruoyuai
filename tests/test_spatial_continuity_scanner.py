@@ -376,21 +376,72 @@ def test_no_character_cards_skipped():
     assert "no character cards" in (r.get("note") or ""), r
 
 
-# ═══════════ 11. CLI 契约：draft_path --project <root> [--cluster] ═══════════
+# ═══ 11. CLI 契约：draft_path --project <root> [--cluster cluster_<key>] ═══
+# 🔴 回归锁：--cluster 是【带值】参数（收 cluster_id），不是 store_true 开关。
+# 病史：曾定义成 action='store_true'，而 audit_hub cluster 模式传 `--cluster cluster_001`
+# → argparse exit 2「unrecognized arguments」→ 本 scanner 在 cluster 主链上从未产出过结果。
 
 def test_cli_contract_active_exit1():
-    """CLI 全链：active 下 2 违规 → JSON 形态完整 + exit 1（照抄 cia scanner 约定）。"""
+    """CLI 全链：active 下 2 违规 → JSON 形态完整 + exit 1（照抄 cia scanner 约定）。
+    --cluster 传 audit_hub 真实 argv 形态（cluster_001）·必须被接受。"""
     proj = _mk_project(characters=_CHARS)
     draft = _write_draft(proj, _TELEPORT_2PAIRS)
     env = dict(os.environ,
                SPATIAL_CONTINUITY_MODE="active", PYTHONIOENCODING="utf-8")
     cp = subprocess.run(
         [sys.executable, str(_ROOT / "core" / "scripts" / "spatial_continuity_scanner.py"),
-         str(draft), "--project", str(proj), "--cluster"],
+         str(draft), "--project", str(proj), "--cluster", "cluster_001"],
         capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
     assert cp.returncode == 1, (cp.returncode, cp.stdout, cp.stderr)
     report = json.loads(cp.stdout)
     assert report["code"] == "SPATIAL_CONTINUITY_TELEPORT", report
+    assert report["cluster_id"] == "cluster_001", report
     assert report["cluster_mode"] is True, report
     assert report["gate_level"] == "advisory", report
     assert len(report["violations"]) == 2, report
+
+
+def test_cli_cluster_arg_takes_value_not_store_true():
+    """🔴 契约锁：`--cluster cluster_001` 不得报 unrecognized arguments（argparse exit 2）。
+    audit_hub 的 ok_set={0,1} 容不下 exit 2 → 一旦回退成 store_true 就静默丢结果。"""
+    proj = _mk_project(characters=_CHARS)
+    draft = _write_draft(proj, "顾长风盘膝坐在地窖最深处。\n")
+    env = dict(os.environ, SPATIAL_CONTINUITY_MODE="active", PYTHONIOENCODING="utf-8")
+    cp = subprocess.run(
+        [sys.executable, str(_ROOT / "core" / "scripts" / "spatial_continuity_scanner.py"),
+         str(draft), "--project", str(proj), "--cluster", "cluster_001"],
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
+    assert cp.returncode != 2, (cp.returncode, cp.stdout, cp.stderr)
+    assert "unrecognized arguments" not in cp.stderr, cp.stderr
+
+
+def test_cluster_id_inferred_from_draft_path_without_flag():
+    """--cluster 缺省 → 从 cluster_<key>_draft 路径推断（cluster_lookup 归一·禁机械拼接）。"""
+    proj = _mk_project(characters=_CHARS)
+    d = proj / "章节" / "cluster_003_draft"
+    d.mkdir(parents=True)
+    draft = d / "cluster_003_draft.txt"
+    draft.write_text("顾长风盘膝坐在地窖最深处。\n", encoding="utf-8")
+    with _env(SPATIAL_CONTINUITY_MODE="active"):
+        r = sc.scan(draft, proj)
+    assert r["cluster_id"] == "cluster_003", r
+    assert r["cluster_mode"] is True, r
+
+
+def test_cluster_arg_normalized_by_cluster_lookup():
+    """--cluster 收 6 / "6" / "cluster_6" 都归一到 cluster_006（禁 f"cluster_{ch:03d}" 拼接）。"""
+    proj = _mk_project(characters=_CHARS)
+    draft = _write_draft(proj, "顾长风盘膝坐在地窖最深处。\n")
+    with _env(SPATIAL_CONTINUITY_MODE="active"):
+        for raw in ("6", "cluster_6", "cluster_006", 6):
+            assert sc.scan(draft, proj, cluster_arg=raw)["cluster_id"] == "cluster_006", raw
+
+
+def test_cluster_id_none_when_unresolvable():
+    """裸 draft 路径 + 无 --cluster → cluster_id=None·cluster_mode=False（不臆造 id）。"""
+    proj = _mk_project(characters=_CHARS)
+    draft = _write_draft(proj, "顾长风盘膝坐在地窖最深处。\n")
+    with _env(SPATIAL_CONTINUITY_MODE="active"):
+        r = sc.scan(draft, proj)
+    assert r["cluster_id"] is None, r
+    assert r["cluster_mode"] is False, r

@@ -30,6 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402
+import protagonist_lookup  # noqa: E402
 
 # 复用 hook_strength 的章末钩子评分逻辑（DRY，避免两套打分口径）
 import hook_strength_scanner as hss  # noqa: E402
@@ -65,21 +66,15 @@ def first_sentence(body: str) -> str:
 
 def find_protagonist_name(project_root: Path, ch: int, body: str):
     """定位主角名。优先级：
-      1) _数据库/人物卡.json 里 role=='主角'
+      1) protagonist_lookup 多源反查（人物卡主角位 → 角色弧线 → 事件簇 → 角色池）
       2) _changes.json 的 character_changes 第一个出现的人名
       3) 启发式：正文里出现频次最高的 2-3 字中文人名候选
     返回 (name, source)；都失败返回 (None, "unknown")。
     """
-    # 1) 人物卡
-    card_path = project_root / "_数据库" / "人物卡.json"
-    if card_path.is_file():
-        try:
-            cards = json.loads(card_path.read_text(encoding="utf-8")).get("characters", [])
-            protag = next((c for c in cards if c.get("role") == "主角"), None)
-            if protag and protag.get("name"):
-                return protag["name"], "人物卡.json"
-        except Exception:
-            pass
+    # 1) 全仓唯一主角反查
+    detail = protagonist_lookup.resolve_protagonist_detail(project_root)
+    if detail["name"]:
+        return detail["name"], detail["source"]
     # 2) _changes.json
     try:
         changes = cio.read_changes(project_root, ch)
