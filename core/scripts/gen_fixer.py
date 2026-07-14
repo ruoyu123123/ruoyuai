@@ -12,6 +12,10 @@ checker 输出的违规精修。正文问题必须回到 cluster 草稿层修复
   --mode validator-repair    按 novel-validator-checker 输出 brief.json 精修违规段落
   --mode voice-fix           按 novel-voice-checker 输出 brief.json 修对话 voice 漂移
 
+路径基座（唯一口径）：`--files` / `--report-file` / `--brief` 全部**相对 --project 解析**
+（绝对路径原样用）。改稿落盘后由 changes_io.sync_cjk_actual 把同目录 cluster changes.json
+的字数遥测对齐草稿真值。
+
 用法示例：
 
   # 综合修复（读 R1 报告自动定位 issue）
@@ -32,13 +36,16 @@ checker 输出的违规精修。正文问题必须回到 cluster 草稿层修复
   python core/scripts/gen_fixer.py \\
     --project "workspace/novels/<book>" \\
     --mode validator-repair \\
-    --brief 章节/_quality/validator_brief_ch_006.json
+    --brief _数据库/.checker_briefs/cluster_001_validator.json
 
   # voice brief 精修
   python core/scripts/gen_fixer.py \\
     --project "workspace/novels/<book>" \\
     --mode voice-fix \\
-    --brief 章节/_quality/voice_brief_ch_006.json
+    --brief _数据库/.checker_briefs/cluster_001_voice.json
+
+checker brief 统一契约（novel-validator-checker / novel-voice-checker 共用信封）：
+  {"version": 2, "carrier": "cluster", "cluster_id": "...", "draft_path": "章节/cluster_<key>_draft/cluster_<key>_draft.txt", "violations": [...]}
 
 配置：参见 .env 中 GEN__<name>__* 字段 + GEN_MODEL_ACTIVE。
 管理：python core/scripts/gen_model.py list / switch / show / add
@@ -67,6 +74,8 @@ from gen_model_loader import (  # noqa: E402
 )
 import llm_transport  # noqa: E402 · 统一 transport 层（重试/续写/双协议分发单一真理源）
 import chapter_io as cio  # noqa: E402 · CJK 计数权威口径（统一覆盖扩展 CJK）
+# 改稿后 changes.json 字数遥测回写唯一入口（与 gen_writer 共用·杜绝两处各写各的）。
+import changes_io  # noqa: E402
 from log_util import get_logger  # noqa: E402
 
 logger = get_logger(__name__)
@@ -236,32 +245,32 @@ def render_violations_table(violations: list[dict]) -> str:
     return '\n\n'.join(lines)
 
 
-def build_validator_repair_prompt(brief: dict, chapter_content: str) -> tuple:
+def build_validator_repair_prompt(brief: dict, draft_content: str) -> tuple:
     """validator-checker 输出 brief → 精修违规段落"""
-    chapter_path = brief.get('chapter_path', '')
+    draft_path = brief.get('draft_path', '')
     violations = brief.get('violations', [])
     violations_table = render_violations_table(violations)
 
     system = f"""你是长篇小说的违规精修引擎。
 
-novel-validator-checker agent 已读完章节并定位所有违规段落，把违规清单（含原文片段 + issue + fix_hint）交给你。
+novel-validator-checker agent 已读完 cluster 草稿并定位所有违规段落，把违规清单（含原文片段 + issue + fix_hint）交给你。
 你的任务：**精确替换违规段落**，不动其他段落。
 
 {COMMON_HARD_RULES}
 
 # 修复原则
 - 每条违规独立修复，按 fix_hint 给的方向走
-- 不重写章节情节
+- 不重写情节
 - 不破坏角色 voice_pack
 - 修复后段落必须**自然衔接**前后文（读起来像作者本人改的，不是 AI 补丁）
 - 长度大致守恒（修复段不大幅膨胀/缩短，± 30% 内）
 
 # 输出格式
 
-输出**完整修复后正文**（保留章节标题第一行），用以下格式包裹：
+输出**完整修复后正文**（保留草稿第一行），用以下格式包裹：
 
 ```
-===FILE: <章节相对路径>===
+===FILE: <草稿相对路径>===
 <完整正文>
 ===END===
 ```
@@ -282,12 +291,12 @@ novel-validator-checker agent 已读完章节并定位所有违规段落，把�
 
 {violations_table}
 
-# 待修复章节
+# 待修复 cluster 草稿
 
-`{chapter_path}`
+`{draft_path}`
 
 ```
-{chapter_content}
+{draft_content}
 ```
 
 按违规清单精修，不引入新 anti-slop，输出完整修复后正文 + JSON 总结。
@@ -295,9 +304,9 @@ novel-validator-checker agent 已读完章节并定位所有违规段落，把�
     return system, user
 
 
-def build_voice_fix_prompt(brief: dict, chapter_content: str) -> tuple:
+def build_voice_fix_prompt(brief: dict, draft_content: str) -> tuple:
     """voice-checker 输出 brief → 修对话 voice 漂移"""
-    chapter_path = brief.get('chapter_path', '')
+    draft_path = brief.get('draft_path', '')
     violations = brief.get('violations', [])
     violations_table = render_violations_table(violations)
 
@@ -318,7 +327,7 @@ novel-voice-checker agent 已审查所有对话，定位 voice 漂移 / tone 不
 # 输出格式
 
 ```
-===FILE: <章节相对路径>===
+===FILE: <草稿相对路径>===
 <完整正文>
 ===END===
 ```
@@ -340,12 +349,12 @@ novel-voice-checker agent 已审查所有对话，定位 voice 漂移 / tone 不
 
 {violations_table}
 
-# 待修复章节
+# 待修复 cluster 草稿
 
-`{chapter_path}`
+`{draft_path}`
 
 ```
-{chapter_content}
+{draft_content}
 ```
 
 按违规清单精修对话，保持角色音域，不动情节，输出完整修复后正文 + JSON 总结。
@@ -501,9 +510,12 @@ def run_scanners(file_paths: list) -> dict:
             if not sc_path.exists():
                 results[fp][sc] = {'verdict': 'SKIP'}
                 continue
-            # 用 child_python() 防多版本解释器调错
+            # 用 child_python() 防多版本解释器调错；强制子进程 UTF-8 输出（同 audit_hub._run）
+            # 否则 GBK 环境下 scanner 的 CJK stdout 被 encoding='utf-8' 捕获成 mojibake → 解析失败。
             r = subprocess.run([child_python(), str(sc_path), fp],
-                               capture_output=True, text=True, encoding='utf-8')
+                               capture_output=True, text=True, encoding='utf-8',
+                               env={**os.environ, "PYTHONIOENCODING": "utf-8",
+                                    "PYTHONUTF8": "1"})
             try:
                 d = json.loads(r.stdout)
                 results[fp][sc] = {'verdict': d.get('verdict'),
@@ -548,28 +560,34 @@ def main():
             logger.error(f" brief 不存在: {brief_path}")
             sys.exit(2)
         brief = json.loads(brief_path.read_text(encoding='utf-8'))
-        # brief schema 验证
-        if brief.get('version') != 1:
-            logger.error(f" brief schema version 不兼容: {brief.get('version')}, 期望 1")
+        # brief schema 验证（统一契约：version=2 + carrier=cluster + draft_path）
+        if brief.get('version') != 2:
+            sys.stderr.write(
+                f"[FATAL gen_fixer] brief schema version 不兼容: {brief.get('version')}, 期望 2"
+                f"（checker brief 统一契约·重跑 novel-validator-checker / novel-voice-checker 重产 brief）\n")
+            sys.stderr.flush()
             sys.exit(3)
-        chapter_path = brief.get('chapter_path')
-        if not chapter_path:
-            logger.error(f" brief 缺 chapter_path 字段")
+        draft_path = brief.get('draft_path')
+        if not draft_path:
+            sys.stderr.write(
+                "[FATAL gen_fixer] brief 缺 draft_path 字段（cluster 草稿相对路径·checker agent 必填）\n")
+            sys.stderr.flush()
             sys.exit(3)
-        target = Path(chapter_path)
+        target = Path(draft_path)
         if not target.is_absolute():
-            target = project_root / chapter_path
+            target = project_root / draft_path
         if not target.exists():
-            logger.error(f" brief 指向的章节不存在: {target}")
+            sys.stderr.write(f"[FATAL gen_fixer] brief 指向的 cluster 草稿不存在: {target}\n")
+            sys.stderr.flush()
             sys.exit(2)
-        chapter_content = target.read_text(encoding='utf-8')
-        files_content = {chapter_path: chapter_content}
-        args.files = [chapter_path]  # 让后续 scanner 等流程统一
+        draft_content = target.read_text(encoding='utf-8')
+        files_content = {draft_path: draft_content}
+        args.files = [draft_path]  # 让后续 scanner 等流程统一
 
         if args.mode == 'validator-repair':
-            system, user = build_validator_repair_prompt(brief, chapter_content)
+            system, user = build_validator_repair_prompt(brief, draft_content)
         else:  # voice-fix
-            system, user = build_voice_fix_prompt(brief, chapter_content)
+            system, user = build_voice_fix_prompt(brief, draft_content)
     else:
         # comprehensive / polish 走原 --files
         if not args.files:
@@ -589,7 +607,17 @@ def main():
             if not args.report_file:
                 sys.stderr.write("[ERROR gen_fixer] --mode comprehensive 需要 --report-file\n"); sys.stderr.flush()
                 sys.exit(2)
-            report = json.loads(Path(args.report_file).read_text(encoding='utf-8'))
+            # 路径基座与 --files / --brief 同款：相对路径一律相对 --project 解析（绝对路径原样用）。
+            report_path = Path(args.report_file)
+            if not report_path.is_absolute():
+                report_path = project_root / args.report_file
+            if not report_path.exists():
+                sys.stderr.write(
+                    f"[FATAL gen_fixer] --report-file 不存在: {report_path}"
+                    f"（相对路径相对 --project={project_root} 解析）\n")
+                sys.stderr.flush()
+                sys.exit(2)
+            report = json.loads(report_path.read_text(encoding='utf-8'))
             system, user = build_comprehensive_prompt(args.files, report, files_content)
         else:  # polish
             if not args.instructions:
@@ -656,6 +684,20 @@ def main():
         logger.info(f"  原始输出已存: {debug_path}")
         sys.exit(3)
 
+    # 🔴 改稿后必须把 changes.json 的字数遥测对齐新草稿真值（changes_io 单一真理源）。
+    # 不回写 = ecas_metadata.cjk_actual 停在改稿前的旧值 → writer_truth_check 判 writer 说谎
+    # （lie）→ cluster-save-state step 3 阻断流水线。契约破损响亮失败，不静默跳过。
+    changes_synced = []
+    for f in files_written:
+        try:
+            r = changes_io.sync_cjk_actual(f['path'])
+        except changes_io.ChangesIOError as e:
+            sys.stderr.write(f"\n[FATAL gen_fixer] changes.json 字数遥测回写失败: {e}\n")
+            sys.stderr.flush()
+            sys.exit(2)
+        changes_synced.append({'changes_path': str(r['changes_path']), 'cjk_actual': r['cjk']})
+        logger.info(f"  [changes 同步] {r['changes_path'].name} cjk_actual={r['cjk']}")
+
     logger.info(f"\n[gen_fixer] 跑 scanner 验证...")
     scan_results = run_scanners([f['path'] for f in files_written])
     logger.info(f"\n=== Scanner Results ===")
@@ -672,6 +714,7 @@ def main():
         'used_profile': used_profile.name,
         'used_model': used_profile.model,
         'files_written': files_written,
+        'changes_synced': changes_synced,
         'rejected_blocks': rejected,
         'gen_model_summary': summary,
         'scanner_results': scan_results,

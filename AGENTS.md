@@ -112,11 +112,19 @@ STEP: <当前步骤号，与模板 steps[].n 对齐>
 
 **Jobs pending 协议**：部分 required step 的脚本以 exit 2 = pending（如 `pending_av_jobs` / `pending_titles` / `pending_volume_arc_units`）声明「jobs manifest 已登记待补件」——主代理按 manifest spawn 对应 agent 补齐产物后**重跑同一命令**续跑验收；pending 期间不得调 `plan_tracker step`。具体 step、manifest 路径与退出码以各 plan JSON 的 `control_flow.exit_codes` 为准。
 
-### 与 WAL 的关系
+### 与 `.wal/` 的关系（`.wal/` 是产物区，不是断点机制）
 
-- **WAL**：`cluster-save-state` **单命令内**的细粒度断点恢复（`completed_steps` 字段）— 单命令、细颗粒、断点续跑
-- **Plan**：所有 6 个命令统一的**强制规划层** — 跨命令、粗颗粒、可审计
-- **二者共存不冲突**：plan_tracker 不动 WAL 任何字段，WAL 不动 plan_tracker 状态。详见 lessons §八 L8.4
+- **续跑点的唯一真相源 = plan_tracker 的 plan JSON**（`_数据库/.plans/<plan_id>.json` 的 `steps[].status`）。
+  `wal_recovery.py` 读它算出**第一个未完成 step** 并输出「续跑: ... --n N」；`/continue` / `/session-start` 只认这个数。
+- **`.wal/` = 各 step 的产物与回执存放区**，不是断点日志。实际存的是流水线中间产物：
+  `cluster_<key>_summary.json` / `_state_delta.json` / `_archive.json` / `_reflection.json` / `_entity_stats.json` /
+  `_titles.json` / `_volume_boundary.json` / `_emergence.json` / 各类 `*_receipt.json` /
+  `inspiration_cards.json` / `volume_arc_*.json` / `splitter_cluster_<key>_decisions.json` 等——
+  由对应 agent 与确定性脚本读写，供下游 step 消费和 plan 的 `expected_outputs` 验收。
+- **`cluster_<key>_schema_validate.json` 是 step 1 的确定性校验报告**（`db_schema_validate.py
+  --report-out` 落盘：result / errors_count / warnings_count / 时间戳）。plan 模板不用 touch_outputs
+  造 0 字节占位当 step 产物；**禁止据任何 `.wal/` 文件判断中断/完成**（续跑点只看 plan JSON）。
+- **Plan**：所有 plan 命令统一的**强制规划层** — 跨命令、粗颗粒、可审计（详见 lessons §八 L8.4）。
 
 ---
 
@@ -391,7 +399,7 @@ MAPE-K 闭环 4 组件（数据锚 **系统级** `core/claude-home/runtime/`，�
 ### 1. writer 两阶段（唯一形态）
 
 - **step 2a Codex 亲笔**：novel-writer agent 读 manifest/风格 skill/brief/research 后**逐场景亲笔写作**（每场景写透·分场景落盘 `claude_scenes/scene_*.txt` 规避单响应上限）+ 拼接审计基线 `cluster_<key>_draft_claude.txt` + 自评草稿 `changes_claude.json`。写作硬守则：弯引号 U+201C/201D、非对话段一段一句末符、禁用词零容忍、锁定事实零漂移、伏笔只埋不剧透。
-- **step 2b gemini 润色**：`gen_writer.py` 公开 CLI 只接受 `--project <path> --cluster <N>` → 自动发现 claude_scenes/ → 逐场景段调 gemini 按风格档**等体量重写润色**（段级守恒带 [0.85,1.30]·超界带字数指令重试 1 次）→ 拼接出终稿 `cluster_<key>_draft.txt`。
+- **step 2b gemini 润色**：`gen_writer.py` 公开 CLI 只接受 `--project <path> --cluster <N>` → 自动发现 claude_scenes/ → 逐场景段调 gemini 按风格档**等体量重写润色**（段级守恒带 [0.85,1.30]·超界带字数指令重试 1 次；引号占比不得净降·净降超阈带指令重试 1 次·仍降则该段保留 Codex 原稿跳过润色）→ 拼接出终稿 `cluster_<key>_draft.txt`。
 - changes.json = Codex self_eval/waivers + gen_writer 确定性遥测合并，标 `writer_mode: "claude_draft_gemini_polish_v29"` + `chapter_count_decided_by_splitter: true`
 - 🔴 **禁止 gen-model 从零生成**（gen_writer 已无该路径·缺 claude_scenes/ 即 [FATAL]·不兼容不降级）；禁止 expand/字数兜底复活（字数不够=回头把场景写透而非尾部注水）。
 

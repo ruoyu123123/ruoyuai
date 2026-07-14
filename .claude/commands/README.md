@@ -16,7 +16,7 @@ description: 若渝AI 命令索引（文档非命令）
 | `/outline` | 初始化项目和 34 个核心子系统，生成卷级大势，只详化首个 cluster |
 | `/cluster-write` | 写一个故事块：manifest、整块草稿、cluster 级审核、切章、标题 |
 | `/cluster-save-state` | 保存故事块状态，回写账本，涌现下一 cluster 候选 |
-| `/continue` | 从 WAL / plan / 文件产物恢复中断步骤 |
+| `/continue` | 从 plan_tracker 的 plan JSON（唯一断点真相源）恢复中断步骤 |
 | `/export` | 拼接并导出全文 |
 
 ## 蒸馏与校准

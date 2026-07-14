@@ -33,7 +33,7 @@ STEP: <主代理传入的 plan step，如所在命令需要>
 | cluster changes | `章节/cluster_<key>_draft/cluster_<key>_changes.json` | 只读 `self_eval` / `waivers` 佐证，先独立判断再比对 |
 | repair brief | `_数据库/.checker_briefs/cluster_<key>_validator.json` | 唯一允许写入的文件 |
 
-`brief.chapter_path` 必须填 cluster 草稿相对路径：
+`brief.draft_path` 必须填 cluster 草稿相对路径：
 
 ```text
 章节/cluster_<key>_draft/cluster_<key>_draft.txt
@@ -82,9 +82,10 @@ Brief schema：
 
 ```json
 {
-  "version": 1,
+  "version": 2,
+  "carrier": "cluster",
   "cluster_id": "cluster_001",
-  "chapter_path": "章节/cluster_001_draft/cluster_001_draft.txt",
+  "draft_path": "章节/cluster_001_draft/cluster_001_draft.txt",
   "checker": "novel-validator-checker",
   "mode": "validate-check",
   "violations": [
@@ -156,7 +157,12 @@ Brief schema：
 | `hard_gate` | 客观错误，不可豁免 | 必列入 violations；audit_hub 强制忽略豁免 |
 | `advisory` | 风格/工艺建议 | 只有独立判断成立才列入；不成立则写入 waivers |
 
-hard_gate 清单以 `core/Codex-home/STRUCTURE.md` 第十二节和 `core/scripts/audit_hub.py` 为准，不在本 agent 内另立清单。
+hard_gate 清单以 `core/claude-home/STRUCTURE.md` 第十二节和 `core/scripts/audit_hub.py` 为准，不在本 agent 内另立清单。
+
+**🔴 waiver code 契约（禁自造）**：`waivers[].code` 必须**照抄审计输出里真实 issue 的
+`code` 字段**（如 `WC_TOO_SHORT`）；禁止发明 code——自造 code 会被 audit_hub 判为
+orphan：豁免失效、issue 照样 live，且会被响亮回显（控制台 [WARN] 块 + 派单
+`waiver_feedback` 告知真实可用 code）。
 
 ## fix_hint 写法
 
@@ -200,4 +206,4 @@ python core/scripts/gen_fixer.py \
   --brief <brief_path>
 ```
 
-`gen_fixer.py` 会按 `brief.chapter_path` 解析到 cluster 草稿并精确替换。'''
+`gen_fixer.py` 会按 `brief.draft_path` 解析到 cluster 草稿并精确替换。所有路径参数（`--brief` / `--files` / `--report-file`）统一相对 `--project` 解析（绝对路径原样用）。改稿落盘后 gen_fixer 会把同目录 cluster `changes.json` 的字数遥测（`cjk_actual` / `word_count_cjk`）对齐草稿真值，不需要人工回填。'''

@@ -201,7 +201,7 @@ cat .claude/settings.json
 ### Q6：写到一半 API 报 `RateLimitError` / `429` / 网络超时？
 
 - 系统会自动按 `.env` 里 `GEN_MODEL_FALLBACK_CHAIN` 切到备用 profile（如果配了）
-- 没配 fallback 的话流水线会停下，**用 `/continue` 断点续写**，从 `plan_tracker` / WAL 记录的 `/cluster-write` 或 `/cluster-save-state` 中断点恢复
+- 没配 fallback 的话流水线会停下，**用 `/continue` 断点续写**，从 `plan_tracker` 记录的 `/cluster-write` 或 `/cluster-save-state` 中断点恢复
 - 反复 429 = 该供应商限流，换一个或加备用 profile
 
 ### Q7：报错信息看不懂（`openai.AuthenticationError` 之类）？

@@ -53,7 +53,7 @@ STEP: <当前步骤号>
 # 流水线架构（required steps）
 
 ```
-1.  wal-start + db_schema_validate（严格校验）
+1.  schema-validate（db_schema_validate 严格校验 + --report-out 确定性校验报告）
 2.  parse cluster_changes.json (self_eval/waivers · 创作自评 · 不含 factual 自报)
 3.  validate writer self_eval + cluster writer_truth_check（客观状态零回库）
 4.  audit_hub cluster pre-save audit (统一 cluster 审计入口 · hard_gate 校验)
@@ -71,16 +71,16 @@ STEP: <当前步骤号>
 
 ---
 
-# 第 1 步：wal-start + schema-validate
+# 第 1 步：schema-validate
+
+> step 1 的产物 = `_数据库/.wal/cluster_<key>_schema_validate.json` 确定性校验报告
+> （由 `db_schema_validate.py --report-out` 落盘：result / errors_count / warnings_count / 明细 / 时间戳）。
+> 校验不过时报告照写、脚本 exit 1 阻断；续跑点只由 plan JSON 的 `steps[].status` 决定。
 
 ```bash
-# 开 cluster WAL
-WAL_PATH="<项目路径>/_数据库/.wal/cluster_<key>_save_state.json"
-mkdir -p "$(dirname "$WAL_PATH")"
-echo '{"started_at":"'$(date -Iseconds)'","cluster_key":"<key>","status":"running"}' > "$WAL_PATH"
-
-# 数据库 schema 自检 + 自动迁移（v25+ 字段补全）
-python core/scripts/db_schema_validate.py "<项目路径>"
+# 数据库 schema 严格校验 + 写确定性校验报告（step 1 产物）
+python core/scripts/db_schema_validate.py "<项目路径>" \
+  --report-out "_数据库/.wal/cluster_<key>_schema_validate.json"
 # 34 子系统完整性闸（防 cluster 期间子系统更新漏/坏文件 · 缺或坏 → exit 2 阻断）
 python core/scripts/scaffold_subsystems.py verify "<项目路径>"
 ```
@@ -461,11 +461,16 @@ python core/scripts/plan_tracker.py step "$PLAN_ID" --n 13
 
 # 第 14 步：wal-end + plan-end
 
+> 收尾 = 跑 `plan_end_receipt.py` 做 plan 最终校验并落回执，再盖 step 14 + end。
+> 本 cluster 的状态完成证明是 `_数据库/.wal/cluster_<key>_post_state_receipt.json`（step 11 产），
+> 收尾证明是 `_数据库/.wal/cluster_<key>_save_state_end.json`（step 14 产）。
+
 ```bash
-# 关闭 WAL
-WAL_PATH="<项目路径>/_数据库/.wal/cluster_<key>_save_state.json"
-# 由 save_state.py 内部自动收尾，主代理可手动 mark 完成
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 14 --output "_数据库/.wal"
+# 逐条核对 step 1-13 真完成且 verified_outputs 实体文件仍在；
+# 任一步假完成（verified_outputs 为空）或产物丢失 → [FATAL] exit 2，本步不得标完成
+python core/scripts/plan_end_receipt.py "<项目路径>" \
+  --plan-id "$PLAN_ID" --step 14 --command cluster-save-state
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 14
 python core/scripts/plan_tracker.py end "$PLAN_ID"
 ```
 
@@ -479,7 +484,6 @@ python core/scripts/plan_tracker.py end "$PLAN_ID"
 
 - [ ] `plan_tracker.py status $PLAN_ID` 显示所有 required steps 全部 `[x] completed`
 - [ ] `plan_tracker.py end $PLAN_ID` 返回 exit 0
-- [ ] `_数据库/.wal/cluster_<key>_save_state.json` 存在
 - [ ] `_数据库/.wal/cluster_<key>_apply_cluster.json` 存在且 `objective_state_applied=false`；`_数据库/.judge_reports/cluster_<key>_writer-truth-check.json` 为本 cluster 的 pass 报告
 - [ ] `_数据库/.wal/cluster_<key>_entity_stats.json` 存在（step 5 前置 cluster_entity_stats.py 确定性统计 · A15 证据基线）
 - [ ] `_数据库/.wal/cluster_<key>_archive.json`、`cluster_<key>_state_delta.json` 与 `cluster_<key>_state_tracker_receipt.json` 均存在；回执绑定 plan/step/delta SHA-256，step 6 已分别回库实体归档与运行态增量

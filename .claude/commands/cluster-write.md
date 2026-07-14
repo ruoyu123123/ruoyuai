@@ -154,13 +154,14 @@ python core/scripts/build_manifest.py "<项目路径>" "$START_CH"
 - 检索三段式（A6·确定性零 LLM）：RAG/selective_history 的 query 自动带 cluster brief「实体×属性」扩展词组；每条检索命中带 `usage_hint`（块距防复读标签 [NEAR_ECHO_RISK]≤1块/[PARAPHRASE]2-3块/[OK]>3块 + 用途分类）——writer 按标签决定引用方式（advisory）
 - scene 维度门控（A11·env `MANIFEST_SCENE_GATING` 默认 on）：世界观词条点名了与本块出场角色/地点零交集的实体 → 不注入（被滤词条留痕 manifest `_scene_gating` META 段；匹配不到场景信息=不过滤零变化）
 
-**plan-step 1**（manifest + style_directive 都是必须落地的文件）：
+**plan-step 1**（fate_draw decision + pre_write_gate 报告在模板 expected_outputs 里；manifest 文件名按起首章运行时定名，用 `--output` 追加校验）：
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 1 \
+  --output "_数据库/.manifest/ch_$(printf '%03d' "$START_CH").json"
 ```
 
-模板已配 expected_outputs，缺失自动 FAIL。
+expected_outputs 缺失或 `--output` 指的 manifest 没落盘 → 自动 FAIL。
 
 ---
 
@@ -183,7 +184,8 @@ writer 行为（v29 两阶段）：
   拼接审计基线 `cluster_<key>_draft_claude.txt` + 自评草稿 `cluster_<key>_changes_claude.json`
 - **step 2b gemini 分段润色**：agent 调 `gen_writer.py --project <root> --cluster <N>`——自动发现
   claude_scenes/，逐场景段调 gemini 按风格档**等体量重写润色**（守恒带 [0.85,1.30]·超界带字数指令
-  重试 1 次·万字整体润色必须分段进行），拼接出终稿
+  重试 1 次·引号占比不得净降：净降超阈带指令重试 1 次、仍降则该段保留 Claude 原稿跳过润色·
+  万字整体润色必须分段进行），拼接出终稿
 - 产出 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`（终稿 · 整 cluster ≥10000 CJK）
 - 产出 `章节/cluster_<key>_draft/cluster_<key>_changes.json`（Claude self_eval/waivers + gen_writer
   确定性遥测合并 · `writer_mode: claude_draft_gemini_polish_v29` · **writer 链不自报 factual**）
@@ -195,7 +197,7 @@ writer 行为（v29 两阶段）：
 
 > 🔴 **factual 边界（沿用）**：writer 链只产正文 + 创作自评（self_eval/waivers），**不产任何 factual 状态自报**。cluster 级 factual（角色/道具/关系/locked_facts/伏笔）由 Claude agent 事后读正文梳理回库（archivist→apply_archive / foreshadower / outline brief），见 `/cluster-save-state`。
 
-writer 返回后，检查四产物落地（claude_scenes/ + draft_claude.txt + draft.txt + changes.json）。任一缺失 → 停止，向用户报告（writer 契约违规）。
+writer 返回后，检查五产物落地（claude_scenes/scene_*.txt + draft_claude.txt + changes_claude.json + draft.txt + changes.json）。任一缺失 → 停止，向用户报告（writer 契约违规）。模板 expected_outputs 钉死其中 4 个精确文件（scene_*.txt 数量运行时才定，由 draft_claude.txt 拼接基线代证）。
 
 **plan-step 2**：
 
@@ -539,9 +541,15 @@ python core/scripts/chapter_end_anchor_scan.py "<项目路径>" \
 ```
 
 ```bash
-python core/scripts/plan_tracker.py step "$PLAN_ID" --n 7 --output "_数据库/.wal"
+# 收尾校验 + 回执（逐条核对 step 1-6 真完成且 verified_outputs 实体文件仍在；
+# 任一步假完成/产物丢失 → [FATAL] exit 2，本步不得标完成）
+python core/scripts/plan_end_receipt.py "<项目路径>" \
+  --plan-id "$PLAN_ID" --step 7 --command cluster-write
+python core/scripts/plan_tracker.py step "$PLAN_ID" --n 7
 python core/scripts/plan_tracker.py end "$PLAN_ID"
 ```
+
+产物：`_数据库/.wal/cluster_<key>_write_end.json`（收尾回执）。
 
 `plan-end` 返回非 0 ⇒ 上方流水线有步骤漏跑，立即向用户报告**不要假装完成**。
 

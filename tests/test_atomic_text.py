@@ -235,12 +235,20 @@ def test_splitter_pending_tail_routes_through_atomic():
 
 def test_gen_writer_no_bare_draft_write_text_regression():
     """源码层防回归：gen_writer 草稿/changes 落盘不得回归裸 write_text。
-    （gen_writer import 链含 gen_model_loader/frozen_util，零依赖测试不实际 import。）"""
+    （gen_writer import 链含 gen_model_loader/frozen_util，零依赖测试不实际 import。）
+
+    草稿仍由 gen_writer 直接 atomic_write_text 落盘；changes.json 的落盘（含字数遥测）
+    收敛到 changes_io.sync_cjk_actual 单一入口（内部走 atomic_write_json），gen_writer 与
+    gen_fixer 共用，杜绝两处各写各的。"""
     src = (_SCRIPTS / "gen_writer.py").read_text(encoding="utf-8")
     assert "draft_path.write_text" not in src, "草稿回归成裸 write_text"
     assert "changes_path.write_text" not in src, "changes.json 回归成裸 write_text"
     assert "atomic_write_text(draft_path" in src, "草稿未走 atomic_write_text"
-    assert "atomic_write_text(changes_path" in src, "changes.json 未走 atomic_write_text"
+    assert "changes_io.sync_cjk_actual" in src, "changes.json 未走 changes_io 单一回写入口"
+    # changes_io 内部必须原子落盘 changes.json（原子写单一真理源）。
+    cio_src = (_SCRIPTS / "changes_io.py").read_text(encoding="utf-8")
+    assert "changes_path.write_text" not in cio_src, "changes_io 回归成裸 write_text"
+    assert "atomic_write_json(changes_path" in cio_src, "changes_io 未走 atomic_write_json"
 
 
 def test_chapter_splitter_no_bare_product_write_text_regression():

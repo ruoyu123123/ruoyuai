@@ -7,7 +7,8 @@
   step 2b  本脚本：
              python gen_writer.py --project "workspace/novels/<book>" --cluster 6
            → 发现 claude_scenes/ → 逐场景段调 gemini 按风格档等体量重写润色
-             （段级字数守恒带 [0.85, 1.30] · 超界带字数指令重试 1 次）
+             （段级字数守恒带 [0.85, 1.30] · 超界带字数指令重试 1 次；
+              段级引号占比守恒 · 净降超界带引号指令重试 1 次 · 仍降则整段保留 Claude 亲笔原稿）
            → 拼接出终稿 cluster_<key>_draft.txt
            → changes.json = Claude self_eval/waivers + 本脚本确定性遥测合并
 
@@ -45,8 +46,13 @@ from gen_model_loader import (  # noqa: E402
 )
 import llm_transport  # noqa: E402 · 统一 transport 层（重试/续写/双协议分发单一真理源）
 import chapter_io as cio  # noqa: E402 · CJK 计数 + changes schema 规范化权威口径
+# 引号占比唯一口径（与作者基线 dialogue_ratio / validate_style 同一把尺·禁自写第二实现）
+from style_analyzer import calc_dialogue_ratio  # noqa: E402
 import cluster_lookup  # noqa: E402 · cluster_id 归一化（int 6 ↔ "cluster_006" ↔ "6"）
-from atomic_json import atomic_write_text  # noqa: E402 · 草稿/CHANGES 产物原子落盘（崩溃不留半截）
+from atomic_json import atomic_write_text  # noqa: E402 · 草稿产物原子落盘（崩溃不留半截）
+# changes.json 的字数遥测（cjk_actual / word_count_cjk / length_telemetry）唯一回写入口：
+# 从磁盘草稿真值重算，gen_writer（首次落稿）与 gen_fixer（改稿）共用，杜绝两处各写各的。
+import changes_io  # noqa: E402
 import snippet_seed  # noqa: E402 · 真实原文「语感种子」播种（env SNIPPET_SEED_MODE 默认 on）
 from log_util import get_logger, info, debug, warning, error  # noqa: E402
 # 🔴 伏笔明暗线隔离：复用 build_manifest 的明暗线过滤为单一真理源——
@@ -984,9 +990,13 @@ def _author_para_dialogue(db: Path):
     para = _m(q.get("paragraph_length_chars"))
     if para is None and isinstance(q.get("paragraph_length"), dict):
         para = q["paragraph_length"].get("mean_chars")
+    # 对话双配比分拆基线（外部对白 vs 引号心声·蒸馏档 dialogue_only_ratio / inner_monologue_ratio）
+    dia_only = _m(q.get("dialogue_only_ratio"))
+    inner = _m(q.get("inner_monologue_ratio"))
     if single is None and dia is None:
         return None
-    return {"single": single, "dialogue": dia, "para_mean": para}
+    return {"single": single, "dialogue": dia, "para_mean": para,
+            "dialogue_only": dia_only, "inner_mono": inner}
 
 
 def _para_contract_line(author_para: dict = None) -> str:
@@ -1016,6 +1026,16 @@ def _para_contract_line(author_para: dict = None) -> str:
             f"- **对话占比契约（作者档第一权威）**：本作者**对话占比可观**（对话占比约 {dia:.0%}）——"
             f"多写角色交锋/对白推进剧情/潜台词博弈，**别写成纯叙述铺陈**；本 cluster 对话占比"
             f"贴 {dia:.0%}（叙述与对话交替·让人物用台词承载冲突与情绪）。\n")
+    # 对话双配比分拆（外部对白为主体·引号心声为辅助）——堵「引号心声顶替外部对话凑总占比」
+    # + 润色端「引号心声转自由间接引语」两条真实缺陷路径（长恨 cluster_001 实证）。
+    dia_only = (author_para or {}).get("dialogue_only")
+    inner = (author_para or {}).get("inner_mono")
+    if dia_only is not None:
+        inner_txt = f"、引号化心声≈{inner:.0%} 只作辅助" if inner is not None else ""
+        lines.append(
+            f"- **对话双配比（作者档第一权威·分开达标）**：外部角色对白（真人你来我往说出口）"
+            f"≈{dia_only:.0%} 是主体{inner_txt}——**禁止用引号心声顶替外部对白凑总占比**；"
+            f"润色**不得移除引号、不得把引号对白/引号心声改写成无引号的自由间接引语**。\n")
     return "".join(lines)
 
 
@@ -1777,6 +1797,7 @@ cluster_brief 完整内容：
 - **情节走向、事件顺序、关键事实、对话信息量完全不变**——锁定事实（数值/称谓/道具持有）一个字都不许改动语义。
 - 语言、节奏、段落切分、对话腔调全面向风格档靠拢（句长/段长/单句独行/标点分布以数值契约表为准）。
 - **等体量重写**：这一段初稿约 {_pv_src_cjk} 个汉字，你的输出必须落在 {int(_pv_src_cjk * 0.85)}-{int(_pv_src_cjk * 1.3)} 个汉字之间——不许压缩省略情节，也不许注水扩写铺陈。
+- **引号守恒**：初稿里打了引号的对白与引号心声，润色后必须仍以引号呈现——**禁止改写成无引号的自由间接引语/叙述转述**（那是改叙述模式，超出润色授权），也不许把外部对白改写成内心独白。
 - 严禁 AI 套话与禁用词（见上方硬约束）；对话用中文弯引号；非对话段一段只一个句末结束符。
 - 伏笔相关内容按初稿原样保留埋设深度——不解释、不点破、不加暗示。
 - 只润色这一段；直接输出润色后的这一段正文全文，不要标题、不要解释、不要输出任何 JSON。
@@ -1890,37 +1911,6 @@ def call_gen_model(loader: GenModelLoader, system: str, user: str,
     return result.text, result.profile
 
 
-# ============ 长度遥测 ============
-# 仅写入 changes.json 供学习链消费，不参与润色结果选择，也不构成 hard_gate。
-
-
-def length_telemetry_band() -> tuple:
-    """遥测带宽：与 cluster_length_band_scanner._band() 同源同口径（默认 [12000, 25000] ·
-    env CLUSTER_LENGTH_BAND_OVERRIDE="min,max" 覆盖 · 单一真理源不各算各的）。"""
-    import cluster_length_band_scanner as clbs
-    lo, hi, _note = clbs._band()
-    return lo, hi
-
-
-def length_telemetry_score(cjk: int, band: tuple = None) -> float:
-    """cluster 长度连续遥测分 0-100（LongWriter 非对称公式：偏短罚陡 /2 · 超长罚缓 /3）。
-
-    带内 = 100；y < min → 100 * max(0, 1 - (min/y - 1)/2)；
-    y > max → 100 * max(0, 1 - (y/max - 1)/3)；y <= 0 → 0。
-    长度带 scanner 只能二值拒绝，本分把带外偏差量化成连续 reward 特征（gemini 偏短顽疾
-    的训练信号）。仅遥测——不进择稿、不 hard_gate、不回流 writer prompt。
-    """
-    lo, hi = band if band else length_telemetry_band()
-    y = float(cjk)
-    if y <= 0:
-        return 0.0
-    if y < lo:
-        return round(100.0 * max(0.0, 1.0 - (lo / y - 1.0) / 2.0), 2)
-    if y > hi:
-        return round(100.0 * max(0.0, 1.0 - (y / hi - 1.0) / 3.0), 2)
-    return 100.0
-
-
 # ============ Claude 草稿发现与分段润色 ============
 # throughline_progress 由 novel-archivist 抽取回库；ending_type/ending_line 由
 # novel-writer 写入 changes_claude.json。
@@ -1932,6 +1922,22 @@ def length_telemetry_score(cjk: int, band: tuple = None) -> float:
 
 POLISH_CJK_LOW = 0.85   # 段级字数守恒带下限（压缩省略红线）
 POLISH_CJK_HIGH = 1.30  # 上限（注水扩写红线·实测 gemini scene 级可达 +72% 超标）
+
+# 段级引号占比守恒（润色越权确定性核修·与 payoff 词 excise 同范式）：
+# gemini 只被授权等体量润色，把引号对白/引号心声改写成无引号自由间接引语 = 改叙述模式越权
+# （实测长恨 cluster_001 引号心声被砍 64%，总对话占比 16.5%→8.7% 腰斩）。
+# · 下限 0.85 与段级字数守恒带下限 POLISH_CJK_LOW 同源——等体量的「量」也含引号承载的对话量；
+# · 绝对降幅门槛 0.02（2 个百分点）防近零对话段的比值噪声误触发（纯叙述段 1%→0.5% 不该触发）；
+# · 口径 = style_analyzer.calc_dialogue_ratio（引号内 CJK ÷ 全文 CJK·与作者基线同一把尺）。
+POLISH_QUOTE_FLOOR = 0.85
+POLISH_QUOTE_MIN_ABS_DROP = 0.02
+
+
+def quote_ratio_violated(src_ratio: float, out_ratio: float) -> bool:
+    """润色段引号占比是否净降超界（True = 违反引号守恒，需带指令重试 / 保留 Claude 原段）。"""
+    return (src_ratio > 0
+            and out_ratio < src_ratio * POLISH_QUOTE_FLOOR
+            and (src_ratio - out_ratio) >= POLISH_QUOTE_MIN_ABS_DROP)
 
 
 def discover_claude_scenes(project_root: Path, cluster_id: int):
@@ -1971,17 +1977,21 @@ def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
                     ch_start: int, scene_files: list):
     """逐场景段润色主流程。
 
-    每段独立调 gemini（creative=True · 写正文禁 flash 兜底红线沿用）；
-    段级字数守恒校验 [POLISH_CJK_LOW, POLISH_CJK_HIGH]，超界带明确字数指令重试 1 次，
-    再超界取离守恒中心更近者并留痕（北极星⑤透明可审）。
-    返回 (拼接正文, used_profile, polish_trace)。
+    每段独立调 gemini（creative=True · 写正文禁 flash 兜底红线沿用）；两道段级确定性守恒：
+    · 字数守恒 [POLISH_CJK_LOW, POLISH_CJK_HIGH]——超界带明确字数指令重试 1 次，
+      再超界取离守恒中心更近者并留痕；
+    · 引号占比守恒 quote_ratio_violated——净降超界带引号守恒指令重试 1 次，重试仍降
+      **整段保留 Claude 亲笔原稿**（亲笔优先·润色无权改叙述模式）。
+    全程留痕（北极星⑤透明可审）。返回 (拼接正文, used_profile, polish_trace)。
     """
     polished, trace = [], []
     used_profile = None
     seed_trace = None
     total = len(scene_files)
+    quote_triggered = quote_retried_n = quote_kept_n = 0
     for i, (name, src) in enumerate(scene_files):
         src_cjk = cio.count_cjk(src)
+        src_quote = calc_dialogue_ratio(src)
         system, user, _seed = build_prompt(
             project_root, cluster_id, ch_start,
             polish_view={'idx': i, 'total': total, 'scene_text': src})
@@ -2008,13 +2018,55 @@ def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
             if abs(out2 / max(src_cjk, 1) - 1.0) < abs(ratio - 1.0):
                 body, out_cjk = body2, out2
                 ratio = out_cjk / max(src_cjk, 1)
+        # 引号占比守恒核查（字数守恒定稿后跑；重试稿须同时过两道守恒才收）
+        out_quote = calc_dialogue_ratio(body)
+        q_retried = False
+        q_kept_claude = False
+        if quote_ratio_violated(src_quote, out_quote):
+            quote_triggered += 1
+            quote_retried_n += 1
+            q_retried = True
+            logger.warning(f"[polish] {name} 引号占比净降超界 "
+                           f"{src_quote:.1%}→{out_quote:.1%} · 带引号守恒指令重试 1 次")
+            user_q = user + (
+                f"\n\n【引号守恒警告】你上一版输出把引号内容改写成了无引号叙述：这一段初稿"
+                f"引号内汉字占比约 {src_quote:.0%}，你的输出只剩约 {out_quote:.0%}。"
+                f"润色只被授权等体量重写，**不得改变叙述模式**——初稿里打了引号的对白与心声，"
+                f"润色后必须仍在引号里，禁止改写成无引号的自由间接引语或叙述转述；"
+                f"输出字数仍须落在 {int(src_cjk * POLISH_CJK_LOW)}-{int(src_cjk * POLISH_CJK_HIGH)} "
+                f"个汉字之间。重新输出这一段的润色全文。")
+            reply_q, used_profile = call_gen_model(loader, system, user_q, creative=True)
+            body_q = clean_polished_body(reply_q)
+            out_q_cjk = cio.count_cjk(body_q)
+            ratio_q = out_q_cjk / max(src_cjk, 1)
+            out_q_quote = calc_dialogue_ratio(body_q)
+            if (not quote_ratio_violated(src_quote, out_q_quote)
+                    and POLISH_CJK_LOW <= ratio_q <= POLISH_CJK_HIGH):
+                body, out_cjk, ratio, out_quote = body_q, out_q_cjk, ratio_q, out_q_quote
+            else:
+                # 亲笔优先：重试仍净降引号（或字数出带）→ 整段保留 Claude 亲笔原稿
+                quote_kept_n += 1
+                q_kept_claude = True
+                body, out_cjk, ratio, out_quote = src, src_cjk, 1.0, src_quote
+                logger.warning(f"[polish] {name} 引号守恒重试仍超界 → 保留 Claude 亲笔原段"
+                               f"（亲笔优先·该段跳过润色稿）")
         polished.append(body)
         trace.append({'scene': name, 'src_cjk': src_cjk, 'out_cjk': out_cjk,
-                      'ratio': round(ratio, 3), 'retried': retried})
-        logger.info(f"[polish] {name}: {src_cjk}→{out_cjk} CJK (ratio={ratio:.2f})")
+                      'ratio': round(ratio, 3), 'retried': retried,
+                      'src_quote_ratio': round(src_quote, 4),
+                      'out_quote_ratio': round(out_quote, 4),
+                      'quote_retried': q_retried,
+                      'quote_kept_claude': q_kept_claude})
+        logger.info(f"[polish] {name}: {src_cjk}→{out_cjk} CJK (ratio={ratio:.2f} · "
+                    f"quote {src_quote:.1%}→{out_quote:.1%})")
     return "\n\n".join(polished), used_profile, {
         'mode': 'per_scene_polish_v29', 'scenes': trace,
         'conservation_band': [POLISH_CJK_LOW, POLISH_CJK_HIGH],
+        'quote_guard': {'floor_ratio': POLISH_QUOTE_FLOOR,
+                        'min_abs_drop': POLISH_QUOTE_MIN_ABS_DROP,
+                        'scenes_triggered': quote_triggered,
+                        'scenes_retried': quote_retried_n,
+                        'scenes_kept_claude': quote_kept_n},
         'snippet_seed': seed_trace or {'snippet_seed_mode': 'on', 'injected': False}}
 
 
@@ -2212,14 +2264,12 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
     draft_dir = project_root / '章节' / f'cluster_{cluster_id:03d}_draft'
     draft_dir.mkdir(parents=True, exist_ok=True)
     draft_path = draft_dir / f'cluster_{cluster_id:03d}_draft.txt'
-    changes_path = draft_dir / f'cluster_{cluster_id:03d}_changes.json'
 
     # 草稿是 cluster 主轨核心产物，原子落盘（tmp+fsync+replace）。
     atomic_write_text(draft_path, body)
 
-    # 补全 changes 元数据
-    cjk = cio.count_cjk(body)  # 统一 CJK 口径走 chapter_io（覆盖扩展 CJK）
-    _lt_band = length_telemetry_band()  # 遥测带（与 cluster_length_band_scanner 同口径）
+    # 补全 changes 元数据（字数遥测除外——cjk_actual / word_count_cjk / length_telemetry
+    # 由 changes_io.sync_cjk_actual 从磁盘草稿真值回写，与 gen_fixer 改稿后共用同一入口）。
     ch_range_str = f'{ch_start}-TBD_by_splitter'
 
     # 收口为唯一 self_eval 合同；客观状态由 save-state 的专用 Agent 产物承载。
@@ -2235,24 +2285,21 @@ def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
         'generated_by_profile': used_profile.name,
         'generated_by_model': used_profile.model,
         'generated_at': datetime.now().isoformat(),
-        'cjk_actual': cjk,
         'writer_mode': 'claude_draft_gemini_polish_v29',
-        # 非对称长度遥测分（LongWriter · 偏短/2 超长/3）：
-        # 仅遥测字段供 learning_loop/BPR 当 reward 特征——不参与择稿/重写决策、不回流 writer prompt。
-        'length_telemetry': {
-            'score': length_telemetry_score(cjk, _lt_band),
-            'band': list(_lt_band),
-            'formula': 'longwriter_asymmetric(under/2, over/3)',
-        },
     })
     # v29 润色留痕（per-scene 守恒遥测 · 北极星⑤透明可审）
     if polish_trace:
         se['ecas_metadata']['polish'] = polish_trace
+        # 引号守恒核查遥测同步进 dialogue_telemetry.quote_guard（schema 封闭清单字段·确定性写入）
+        qg = polish_trace.get('quote_guard') if isinstance(polish_trace, dict) else None
+        if qg:
+            se.setdefault('dialogue_telemetry', {})['quote_guard'] = qg
     se.setdefault('waivers', [])
     se.setdefault('uncertainty_flags', [])
-    # changes.json 半截损坏 = 下游 audit_hub/split_cluster_changes 解析崩。
-    atomic_write_text(changes_path,
-                      json.dumps(changes, ensure_ascii=False, indent=2))
+    # changes.json 落盘 + 字数遥测（含 length_telemetry reward 特征）唯一入口 · 原子写。
+    synced = changes_io.sync_cjk_actual(draft_path, changes=changes)
+    cjk = synced['cjk']
+    changes_path = synced['changes_path']
 
     logger.info(f"\n[gen_writer] 写出:")
     logger.info(f"  正文: {draft_path} ({cjk} CJK)")
@@ -2272,9 +2319,13 @@ def run_scanners(draft_path: Path) -> dict:
         if not sc_path.exists():
             results[sc] = {'verdict': 'SKIP', 'reason': 'scanner not found'}
             continue
+        # 强制子进程 UTF-8 输出（同 audit_hub._run）：否则 GBK 控制台 / 无 PYTHONIOENCODING 的
+        # 父环境下 scanner 的 CJK stdout 按本地编码落字节，这里按 utf-8 解码得到 mojibake →
+        # json 解析失败，scanner 结果被静默判成 ERROR。
         r = subprocess.run(
             [child_python(), str(sc_path), str(draft_path)],
-            capture_output=True, timeout=120
+            capture_output=True, timeout=120,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
         )
         stdout_text = (r.stdout or b"").decode("utf-8", errors="replace")
         stderr_text = (r.stderr or b"").decode("utf-8", errors="replace")

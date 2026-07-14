@@ -120,7 +120,7 @@ Age      : 12 min
 ┌──┬────────────────────────────────────────────────┬────────────┬─────────────────────────┐
 │ #│ 步骤名                                          │ 状态       │ verified_outputs        │
 ├──┼────────────────────────────────────────────────┼────────────┼─────────────────────────┤
-│ 1│ wal-start+schema-validate                       │ ✅ 完成    │ (无输出校验)            │
+│ 1│ schema-validate                                 │ ✅ 完成    │ cluster_002_schema_validate.json│
 │ 2│ parse-cluster-changes                           │ ✅ 完成    │ cluster_002_changes.json│
 │ 3│ apply-cluster-changes+writer-truth-check         │ ✅ 完成    │ 人物卡.json (锁定+1)    │
 │ ...                                                                                      │

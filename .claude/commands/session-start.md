@@ -1,5 +1,5 @@
 ---
-description: 恢复 cluster-only 写作会话状态，只加载项目、WAL、cluster 与 plan 状态
+description: 恢复 cluster-only 写作会话状态，只加载项目、cluster、plan 状态与 .wal/ 产物
 ---
 
 你是若渝AI。请恢复以下小说项目的 cluster-only 写作状态：
@@ -39,13 +39,13 @@ $ARGUMENTS
 3. `_数据库/事件簇.json`：cluster brief、scene_storyboard、待涌现状态。
 4. `_数据库/用户偏好.json`：`use_direction_cards`、`direction_cards_count` 等走向卡设置。
 5. `_数据库/伏笔表.json`、`人物卡.json`、`世界观.json`：只读当前状态，不做修复。
-6. `_数据库/.wal/`：cluster 流水线 WAL 佐证，只看状态字段，不凭文件存在判定中断。
+6. `_数据库/.wal/`：cluster / outline 流水线各 step 的**产物与回执**（summary / archive / state_delta / receipt 等）。只作产物佐证，**不承载 step 进度**，不凭文件存在判定中断。
 
 缺失文件标记为 `missing`，但不要补写、不要创建空文件。
 
 ---
 
-## 第三步：恢复 WAL / plan 状态
+## 第三步：恢复 plan 状态（断点唯一真相源）
 
 用 plan_tracker 视图做断点判断，权威命令：
 
@@ -59,9 +59,9 @@ python core/scripts/plan_tracker.py list --active
 - `wal_recovery.py` 无未完成 plan：流水线干净，下一动作由 `进度.json.current_cluster` 和走向卡状态决定。
 - 报 `cluster-write` 中断：记录 `cluster_id`、`plan_id`、下一步号，等待 `/cluster-write CLUSTER_ID=<key>` 续跑。
 - 报 `cluster-save-state` 中断：记录 `cluster_id`、`plan_id`、下一步号，等待 `/cluster-save-state CLUSTER_ID=<key>` 续跑。
-- 如某个 cluster 已在 `completed_clusters` 且 WAL 状态为 `done`，把残留 active plan 标为清理候选，不重跑已完成流水线。
+- 如某个 cluster 已在 `completed_clusters` 且其 save-state 产物齐全（`.wal/cluster_<key>_post_state_receipt.json` 存在），把残留 active plan 标为清理候选，不重跑已完成流水线。
 
-不要从章节级产物恢复状态；断点只认 cluster plan / WAL。
+不要从章节级产物恢复状态；**断点只认 plan_tracker 的 plan JSON**（`_数据库/.plans/<plan_id>.json` 的 `steps[].status`，由 `wal_recovery.py` 读出第一个未完成 step）。
 
 ---
 

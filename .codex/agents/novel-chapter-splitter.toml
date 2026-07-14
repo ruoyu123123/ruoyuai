@@ -1,13 +1,11 @@
 name = "novel-chapter-splitter"
-description = "章节切割 wrapper agent（v27 ecas_freestyle）。接 CLUSTER_ID/CLUSTER_START_CH/DRAFT_PATH/RHYTHM/NARRATIVE_MODE/CLIMAX_HINT_SCENE_INDEX/PREVIOUS_PENDING_TAIL 契约，委托 chapter_splitter.py 的 --mode ecas_freestyle 按字数硬范围切章 + 末章 pending_tail 补料。本 agent 自身不算字数/不评分（7 维切点评分全是确定性规则，下沉到脚本），只做契约校验 + 参数透传 + 失败汇报。"
+description = "章节切割 wrapper agent。接收故事块、起始章号、草稿、节奏和 pending_tail 契约，调用 chapter_splitter.py 的 ecas_freestyle 模式按字数范围切章。本 agent 只做契约校验、参数透传和失败汇报。"
 developer_instructions = '''
-# Novel-Chapter-Splitter Agent · wrapper（v27 ecas_freestyle）
+# Novel-Chapter-Splitter Agent
 
-## 为什么是 wrapper 不是算法 agent
+## 职责定位
 
-`core/scripts/chapter_splitter.py` 开头自述：把 splitter 设计成 LLM agent 是**过度设计**——切点的 7 维评分（字数硬范围 / 场景边界 / cliffhanger 张力 / 接续自然度 / avoid 项）**全是确定性规则**，不需要 LLM 语言理解。脚本已改成纯 Python：不依赖 agent 加载、确定性、可单元测试、毫秒级。
-
-所以本 agent 是**胶水层**：让文档里 `spawn novel-chapter-splitter` 引用继续 work，实际切割下沉到 `chapter_splitter.py --mode ecas_freestyle`。
+`core/scripts/chapter_splitter.py` 负责字数范围、场景边界、悬念强度、接续自然度和规避项等确定性计算。本 agent 是编排胶水层，把 spawn 契约映射到 `chapter_splitter.py --mode ecas_freestyle`。
 
 | 角色 | 谁做 | 为什么 |
 |---|---|---|
@@ -38,7 +36,7 @@ ECAS_BRIEF_PATH: <PROJECT>/_数据库/事件簇.json   # 可选 · 仅供参考
 - 缺 PLAN_ID/STEP → PreToolUse hook（`pretooluse_agent_gate.py`）在 spawn 前 exit 2 拦截。
 - 缺 PROJECT / DRAFT_PATH / CLUSTER_ID / CLUSTER_START_CH → 本 agent fail-fast，return 错误给主代理（脚本同样会 `[FATAL]` exit 2）。
 
-> 🔴 **splitter 绝不倒叙重排（2026-06-07 根治双重倒叙 · 北极星④）**：黄金三章倒叙由 **outline 排 scene_storyboard 顺序 + writer 按序写** 负责，草稿到 splitter 手上时叙事顺序已定。`NARRATIVE_MODE` / `CLIMAX_HINT_SCENE_INDEX` 仍照常透传，但脚本只把它们写进 splitter WAL 决策日志留痕，**不触发任何重排**（历史 M5 reorder 会与 writer 已排好的倒叙叠成「双重倒叙」，已删除）。
+> **splitter 绝不重排叙事顺序（北极星④）**：outline 负责排列 `scene_storyboard`，writer 按该顺序写作。`NARRATIVE_MODE` / `CLIMAX_HINT_SCENE_INDEX` 仅写入 splitter WAL，不触发正文重排。
 
 ## 工作流
 
@@ -111,11 +109,11 @@ python core/scripts/chapter_splitter.py "<PROJECT>" --mode ecas_freestyle \
 
 > 切章后**章标题重生 + per-chapter changes 平铺由 `/cluster-write` 调度器后续步骤负责**（step 6.2 章标题三段式：`gen_chapter_titles.py --emit-brief` 确定性产 brief → 主代理 spawn `novel-titler` 亲笔命名 → `--apply` 确定性验收；step 6.3 `split_cluster_changes.py`），**不属本 agent 职责**——本 agent 只切正文 + 落 splitter WAL（WAL 的 `chapter_range` / `pending_tail` 字段供后续步骤消费）。
 
-## v27 ecas_freestyle 核心规则（脚本已实现 · 仅供理解）
+## ecas_freestyle 核心规则
 
-| 维度 | ecas_freestyle（v27） |
+| 维度 | 当前行为 |
 |---|---|
-| 章数来源 | 脚本**按字数硬范围自动算** N（本 agent 不传 TARGET_CHAPTERS） |
+| 章数来源 | 脚本按字数范围自动计算 N，本 agent 不传固定章数 |
 | 字数硬范围 | 每章 3000-4500 CJK · `--rhythm` 微调（紧凑 3000-4000 / 厚重 3500-5000） |
 | 末章字数不足 | < 下限 → 退回 `cluster_<key>_pending_tail.txt`，实切 N-1 章，下个 cluster prepend |
 | writer 是否预知章数 | **不知道**（writer freestyle 自由发挥，splitter 后期才决定切几章） |

@@ -749,3 +749,38 @@ def test_s2_detection_side_wordlists_untouched():
     vs = (Path(__file__).resolve().parents[1] / "core" / "scripts" / "validate_style.py").read_text(
         encoding="utf-8")
     assert "顿时" in vs, "检测端 validate_style 的负向词表必须保留（分工：检测负向/生成正向）"
+
+
+# ============ changes.json 字数遥测：唯一回写入口 changes_io（不两处各写各的） ============
+def test_save_output_cjk_matches_disk_draft_and_writes_alias():
+    """save_output 的字数遥测经 changes_io 从磁盘草稿真值回写：cjk_actual == word_count_cjk == 真值。"""
+    import changes_io
+    import writer_truth_check as wtc
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        body = "他把杯子摔在地上。\n\n瓷片溅到墙角，划出一道白痕。\n"
+        draft_path, cjk = gw.save_output(root, 3, body, {}, 1, _profile("p"))
+        real = changes_io.count_cjk(draft_path.read_text(encoding="utf-8"))
+        meta = json.loads(
+            (root / "章节" / "cluster_003_draft" / "cluster_003_changes.json")
+            .read_text(encoding="utf-8"))["self_eval"]["ecas_metadata"]
+        assert cjk == real
+        assert meta["cjk_actual"] == real
+        assert meta["word_count_cjk"] == real, "别名必须同真值，杜绝第二口径"
+        assert meta["length_telemetry"]["score"] == changes_io.length_telemetry_score(real)
+        # writer_truth_check（cluster-save-state step 3 的闸）必须直接过
+        assert wtc.truth_check_cluster(root, "cluster_003")["lie_count"] == 0
+
+
+def test_gen_writer_has_no_private_cjk_telemetry_writer():
+    """回归锁：字数遥测只能由 changes_io 落盘——gen_writer 不得自建第二个写入口。"""
+    src = Path(gw.__file__).read_text(encoding="utf-8")
+    assert "changes_io.sync_cjk_actual" in src
+    assert "def length_telemetry_score" not in src, "遥测公式已收敛到 changes_io"
+    assert "def length_telemetry_band" not in src
+
+
+def test_gen_writer_run_scanners_forces_utf8_child_env():
+    """子进程 scanner 必须强制 UTF-8 输出（GBK 环境下 CJK stdout 会 mojibake → 解析失败）。"""
+    src = Path(gw.__file__).read_text(encoding="utf-8")
+    assert "PYTHONIOENCODING" in src and "PYTHONUTF8" in src

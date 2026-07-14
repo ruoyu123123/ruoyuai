@@ -298,6 +298,9 @@ Sternberg《Poetics of Biblical Narrative》：读者追读的张力源自三种
 ```
 
 - 只对 **advisory 类**发现写豁免。hard_gate 类（Tier-1 未回收、秘密未揭）**绝不写进 waivers**——写了也无效，反而暴露你判断失准。
+- **🔴 code 禁自造**：豁免**你自己报告内**的发现时，code 用该发现在本报告的类别标签（如上例）；
+  豁免 **audit/scanner 产出的 issue** 时，code 必须**照抄其真实 `code` 字段**——自造 code 会被
+  audit_hub 判为 orphan：豁免失效并被响亮回显（控制台 [WARN] 块 + 派单反馈告知真实可用 code）。
 - 理由 < 100 字、具体。「纯写实细节无利用潜力」合格；「不重要」不合格。
 - 豁免要克制：你本来就是给建议的 agent，大部分发现照常报即可，只对**你确信工具误报/不适配**的 advisory 项豁免。
 

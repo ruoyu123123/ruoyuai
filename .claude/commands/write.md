@@ -186,7 +186,7 @@ cluster_001 是读者留存生死线。它仍由 `/cluster-write` 生成整块�
 cluster-write / cluster-save-state 内部的质检只服务唯一 cluster 链路：
 
 - cluster 草稿阶段统一走 `audit_hub.py --mode cluster --cluster-id <key>` 和相关 cluster 级 scanner。
-- 修复 brief 指向 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`，由 `gen_fixer.py` 在 cluster 草稿层修；修完再由 splitter 切章。
+- 修复 brief 指向 `章节/cluster_<key>_draft/cluster_<key>_draft.txt`，由 `gen_fixer.py` 在 cluster 草稿层修；修完再由 splitter 切章。`gen_fixer.py` 的路径参数（`--files` / `--report-file` / `--brief`）统一相对 `--project` 解析（绝对路径原样用）；改稿落盘后自动把同目录 `changes.json` 的字数遥测对齐草稿真值（无需人工回填）。
 - hard_gate 是硬错误，必须修复后才能继续；风格/工艺类 issue 可记录 waiver，但必须在 cluster brief / JudgeReport 中有具体理由。
 - required step 产物缺失或不合格时必须停在当前 plan；不得把缺失能力写成空实现或标记为成功。
 
@@ -208,7 +208,7 @@ cluster-write / cluster-save-state 内部的质检只服务唯一 cluster 链路
 **好处：**
 - 用户可以回溯任意章节的历史版本（`git log` / `git checkout`）
 - 设定修改后如果不满意，可以 `git revert` 回到调和前
-- WAL 崩溃恢复后，通过 git 可以确认哪些章节已快照
+- 按 plan 断点续跑后，通过 git 可以确认哪些章节已快照
 - 不占用用户精力，全流程自动化
 
 **硬性规则：**

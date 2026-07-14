@@ -48,7 +48,7 @@
 - 故事块写作：Claude 亲笔逐场景写草稿（novel-writer agent · 含创作自评）→ `gen_writer.py` 调 gemini 分段等体量润色出终稿。
 - Cluster 级审核：机械 scanner、阅读反思、声纹检查、伏笔评估和经验沉淀都看整块文本。
 - 状态保存：`/cluster-save-state` 统一回写人物、世界、关系、伏笔、摘要、评价和下块候选。
-- 断点恢复：WAL、plan_tracker 和 Git 快照共同保证可续跑。
+- 断点恢复：plan_tracker 的 plan JSON 记录 step 状态（续跑点唯一真相源），配合 `.wal/` 产物与 Git 快照保证可续跑。
 
 ## 命令边界
 

@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import chapter_io as cio  # noqa: E402  统一正文/数据分离读写
 import cluster_lookup  # noqa: E402  obtained_cluster 是 cluster_id 不是章号
 import manifest_budget  # noqa: E402  S1 分层 token 预算（记账始终开·裁剪仅触发既有硬守卫时）
+import protagonist_lookup  # noqa: E402  主角反查单一真理源（role 自由文本兜底）
 
 # style_injector：从蒸馏库提取 cross_chapter_diversity / golden_passages
 # 治「蒸馏精细但写作粗糙」断层
@@ -220,7 +221,8 @@ class DatabaseScanner:
             if names:
                 return names
         cards = self.load("人物卡", {}).get("characters", [])
-        return [c.get("name") for c in cards if c.get("role") == "主角"]
+        return [c.get("name") for c in cards
+                if protagonist_lookup.is_protagonist_role(c.get("role"))]
 
     # --- 条件判断 ---
 
@@ -1971,7 +1973,7 @@ def _collect_active_character_cards(scanner, active_chars, current_cluster_id):
         if not isinstance(c, dict):
             continue
         nm = c.get("name") or c.get("id")
-        if active_set and nm not in active_set and c.get("role") != "主角":
+        if active_set and nm not in active_set and not protagonist_lookup.is_protagonist_role(c.get("role")):
             continue
         out.append(_sanitize_character_card(c, current_cluster_id))
     return out
@@ -2074,7 +2076,7 @@ def _resolve_protagonist_name(scanner, id2name):
             chars = arc.get("characters") if isinstance(arc, dict) else None
             if isinstance(chars, dict):
                 for pid, info in chars.items():
-                    if isinstance(info, dict) and info.get("role") in ("protagonist", "主角", "主"):
+                    if isinstance(info, dict) and protagonist_lookup.is_protagonist_role(info.get("role")):
                         nm = _canon_char_name(pid, id2name)
                         if nm:
                             return nm
@@ -2085,7 +2087,7 @@ def _resolve_protagonist_name(scanner, id2name):
         try:
             pc = json.loads(pc_p.read_text(encoding="utf-8"))
             for c in (pc.get("characters") or []) if isinstance(pc, dict) else []:
-                if isinstance(c, dict) and c.get("role") in ("主角", "protagonist") and c.get("name"):
+                if isinstance(c, dict) and protagonist_lookup.is_protagonist_role(c.get("role")) and c.get("name"):
                     return c["name"]
         except (OSError, json.JSONDecodeError):
             pass
@@ -3137,7 +3139,7 @@ def _collect_main_character_arc_stage(scanner, _chapter: int) -> dict:
 
     cards = (scanner.load("人物卡", {}) or {}).get("characters", [])
     protagonists = [c.get("name") or c.get("id") for c in cards
-                    if isinstance(c, dict) and c.get("role") == "主角"]
+                    if isinstance(c, dict) and protagonist_lookup.is_protagonist_role(c.get("role"))]
     protagonists = [p for p in protagonists if p]
     if not protagonists:
         protagonists = scanner.active_characters()[:1]
@@ -3597,7 +3599,7 @@ def _collect_offscreen_actions(scanner, chapter: int) -> list[dict]:
             return []
 
     for c in chars_data.get("characters", []):
-        if c.get("role") == "主角":
+        if protagonist_lookup.is_protagonist_role(c.get("role")):
             continue
         name = c.get("name") or c.get("id")
         offscreen = c.get("offscreen", {})
@@ -4599,11 +4601,16 @@ def _build_hard_constraints(
         if dr_m is not None:
             hard_constraints.append(f"（advisory·作者档第一权威·可校准偏离）对话占比 ≥ {max(0.0, dr_m - 0.15):.0%}")
         # dialogue_ratio 含引号化内心独白会系统性高估(实测 1000 章 0.32 vs 纯对话 0.21)
-        # → 补纯对话占比 advisory 旁注(与上方 dr 注入并存·此为真实角色对白基线·防 writer 被高估值误导多写对话)
+        # → 对话双配比 advisory：外部对白与引号心声分开达标（堵「引号心声顶替外部对话凑总
+        #   占比」缺陷路径·长恨 cluster_001 实证外部对白 4.77% vs 作者 20.45% 靠心声 11.74% 顶地板）
         dor_m = _num(quant.get("dialogue_only_ratio", {}).get("mean"))
+        imr_m = _num(quant.get("inner_monologue_ratio", {}).get("mean"))
         if dor_m is not None:
-            hard_constraints.append(f"（advisory·纯对话占比·剔除引号化独白·作者真实口语基线）纯角色对白占比≈{dor_m:.0%}"
-                                    f"（上方『对话占比』含引号化内心独白偏高·此为真实角色对白占比·二者并存参考）")
+            imr_txt = f"·引号化心声≈{imr_m:.0%} 只作辅助" if imr_m is not None else ""
+            hard_constraints.append(
+                f"（advisory·对话双配比·作者档第一权威·分开达标）外部角色对白占比≈{dor_m:.0%} 是主体{imr_txt}"
+                f"（上方『对话占比』总量含引号化心声——外部对白与引号心声分开自评分开达标，"
+                f"禁止用引号心声顶替外部对白凑总占比）")
         sl = quant.get("sentence_length", {})
         sl_m = _num(sl.get("mean"))
         if sl_m is not None:

@@ -72,7 +72,14 @@ RESEARCH_REF: <_数据库/.research_cache/...>
    要求揭晓的伏笔。
 7. **贴作者风格档写**：句长/段长/单句独行/对话占比/标点密度向数值契约表靠拢（gemini 润色
    会做终笔对齐，但底稿越贴，润色漂移越小）。
-8. 章数/切章完全不管（splitter 的事），不写「第 N 章」标记。
+8. **对话双配比分开自评、分开达标**：外部引号对话（角色对别人说出口的话）与引号心声
+   （引号化内心独白）是两个配比——作者档 `quantitative.dialogue_only_ratio` 有值就以它为
+   外部对话主纲、`inner_monologue_ratio` 为心声辅纲；作者档只有总量 `dialogue_ratio` 时，
+   **外部对话必须是对话占比的主体、引号心声只作辅助**。🔴 **禁止用引号心声把总对话占比
+   顶到达标线**（把该写成人物交锋的戏写成独白凑数=风格作弊）——人物要真的你来我往，
+   一段内可多轮对白。两个配比分别报进 `dialogue_telemetry.external_dialogue_ratio` /
+   `quoted_inner_ratio`。
+9. 章数/切章完全不管（splitter 的事），不写「第 N 章」标记。
 
 写完全部场景后拼接落盘审计基线（场景间空行连接）：
 
@@ -82,20 +89,88 @@ RESEARCH_REF: <_数据库/.research_cache/...>
 
 ### 3. 产 self_eval 草稿（step 2a 收尾）
 
-写 `<PROJECT>/章节/cluster_<key>_draft/cluster_<key>_changes_claude.json`：
+写 `<PROJECT>/章节/cluster_<key>_draft/cluster_<key>_changes_claude.json`。
+
+**🔴 封闭字段清单**：`core/claude-home/schemas/changes_schema.json` 是**单一真理源**，
+`additionalProperties: false` —— **多写一个清单外字段，`/cluster-save-state` 的
+`save_state.py --apply-cluster-changes` 直接 exit 2 FATAL，gate 住整个 cluster**。
+下表即全部合法字段，只有 `waivers` 必填，其余按适用性填（manifest 注入了对应子系统数据就填）。
+
+| self_eval 字段 | 类型 | 填法 | 下游消费者 |
+|---|---|---|---|
+| `waivers` ✅**必填** | `[{code, reason}]` | advisory 豁免；`code` 见下方「waiver code 契约」；`reason` ≤300 字且具体到本 cluster 场景（无豁免填 `[]`） | audit_hub / judge |
+| `applied_style` | object（见下） | 本块风格落地自陈 | writer_truth_check / 结局多样性 aggregator |
+| `uncertainty_flags` | `[str]` | 拿不准的点（如「此处是否算剧透伏笔」） | writer_truth_check |
+| `moves_used` | `[{character, move_id, instances}]` | `move_id` 必须 `MV_` 开头且复用角色行动表现有 id；`instances` ≥1 | 角色行动表 aggregator（不填=行动断层） |
+| `stress_evaluation_self` | `{estimated_stress_change, violations_made[], alignments_made[], coping_behaviors_used[]}` | 角色压力自评（后三者为字符串数组） | stress_evaluator |
+| `storyteller_alignment` | `{target_outcome_followed, actual_outcome, phase_alignment_evidence}` | `target_outcome_followed` ∈ `setback\|win\|auto`；`actual_outcome` ∈ `setback\|win\|neutral` | narrator_calibrate |
+| `offscreen_actions_executed` | `[{character, action_index, completed_fully}]` | `action_index` ≥0 整数；`completed_fully` 布尔 | offscreen_update |
+| `writer_mode` | str | `"claude_draft_gemini_polish_v29"` | 遥测 |
+| `cluster_id` | str | `"cluster_001"` | 遥测 |
+| `narrative_mode` | str | 抄 brief 的 `in_medias_res` / `linear` | 遥测 |
+| `narrative_pov_mode` | str | ∈ `first_present` \| `first_retro_consonant` \| `first_retro_dissonant` \| `third_limited` \| `third_omniscient` | attribution_mode_scanner |
+| `scene_count` | int | 实际写的场景数 | 遥测 |
+| `claude_draft_cjk` | int | 亲笔拼接稿 CJK 数 | 遥测 |
+| `foreshadowing_planted_surface` | `[str]` | 本块埋下的 surface_clue id | 伏笔链 |
+| `dialogue_telemetry` | object（见下） | 对话占比遥测 | 遥测 |
+| `ecas_metadata` | object | **别手写**——`gen_writer.py` 确定性填充 | 全链 |
+
+`applied_style` 也是封闭清单，只允许：`opening_type` / `opening_line` / `opening_justification` /
+`ending_type` / `ending_line` / `ending_justification` / `applied_rules[]` / `transitions_used[]` /
+`anchors_hit[]` / `core_techniques_applied[]` / `subtext_count`(int) / `hooks_count`(int)。
+
+`dialogue_telemetry` 封闭清单，只允许：`dialogue_cjk`(int) / `dialogue_ratio`(num) /
+`external_dialogue_ratio`(num·亲笔稿外部引号对话占比·剔除引号心声) / `quoted_inner_ratio`(num·亲笔稿引号心声占比) /
+`claude_draft_dialogue_ratio`(num) / `polished_dialogue_cjk`(int) / `polished_dialogue_ratio`(num) /
+`quote_guard`(object·gen_writer 润色引号守恒核查确定性写入·**别手写**) / `note`(str)。
+其中 `polished_*` 由 `changes_io.sync_cjk_actual` 从磁盘终稿确定性回写，亲笔阶段不填。
+
+**🔴 waiver code 契约（禁自造）**：`waivers[].code` **必须是 audit_hub / scanner 真实产出的
+issue code**——拿不准就照抄 audit 报告里 issue 的 `code` 字段（如 `STYLE_对话占比` /
+`STYLE_长段计数`）。**禁止发明 code**：自造 code 会被 audit_hub 判为 orphan——豁免失效、
+issue 照样 live，且会被响亮回显（控制台 [WARN] 块 + 派单 `waiver_feedback` 告知真实可用
+code），等于没豁免还暴露判断失准。
 
 ```json
 {
   "self_eval": {
-    "waivers": [{"code": "...", "reason": "具体到本 cluster 场景，<300 字"}],
-    "applied_style": {"ending_type": "对话悬念", "ending_line": "最后一句原文"},
+    "waivers": [{"code": "STYLE_长段计数", "reason": "灾难开场需一口气推到底，拆段会断节奏"}],
+    "applied_style": {
+      "opening_type": "拟声定格",
+      "opening_line": "终稿第一句逐字原文",
+      "opening_justification": "倒叙灾难开场，200 字内丢核心悬念",
+      "ending_type": "对话悬念",
+      "ending_line": "终稿最后一句逐字原文",
+      "ending_justification": "留问不答，钩下一块",
+      "anchors_hit": ["锚点A"],
+      "core_techniques_applied": ["白描动作链"],
+      "subtext_count": 3,
+      "hooks_count": 2
+    },
+    "uncertainty_flags": [],
+    "writer_mode": "claude_draft_gemini_polish_v29",
+    "cluster_id": "cluster_001",
+    "narrative_mode": "in_medias_res",
+    "narrative_pov_mode": "third_limited",
     "scene_count": 5,
-    "claude_draft_cjk": 10008
+    "claude_draft_cjk": 10008,
+    "foreshadowing_planted_surface": ["F_001"],
+    "dialogue_telemetry": {"dialogue_cjk": 2100, "dialogue_ratio": 0.21,
+                           "external_dialogue_ratio": 0.15, "quoted_inner_ratio": 0.06}
   }
 }
 ```
 
-只承载创作期自评、豁免和确定性遥测；不得输出任何客观状态字段。
+**writer_truth_check 会拿终稿逐字对账（对不上 = 判 writer 说谎，verdict fail）**：
+
+- `applied_style.ending_type` 落在检测器分类法内（`拟声硬收` / `动作留白` / `对话悬念` /
+  `独立短句` / `信息炸弹` / `场景硬收`）时**必须与终稿实际结尾一致**；标自由文学标签只算 advisory。
+- `ecas_metadata.cluster_id` 与 `cjk_actual` 必须与终稿一致——**润色后若做了确定性核修
+  （excise / reflow），必须同步把 `ecas_metadata.cjk_actual` 更新成核修后的真实 CJK 数**。
+- `opening_line` / `ending_line` 必须是终稿逐字原文，不许复述或改写。
+
+只承载创作期自评、豁免和确定性遥测；不得输出任何客观状态字段（角色/道具/关系/硬事实/伏笔兑现
+由 `/cluster-save-state` 的 archivist / foreshadower 负责）。
 
 ### 4. 调用 gemini 分段润色（step 2b）
 
@@ -106,7 +181,9 @@ python core/scripts/gen_writer.py \
 ```
 
 gen_writer.py 自动发现 `claude_scenes/`，逐场景段调 gemini 按风格档**等体量重写润色**
-（守恒带 [0.85, 1.30]·超界重试 1 次），拼接出终稿 + 合并 changes：
+（字数守恒带 [0.85, 1.30]·超界重试 1 次；**引号占比守恒**：润色段引号内 CJK 占比不得净降
+超界——低于原段 ×0.85 且绝对降幅 ≥2 个百分点即带指令重试 1 次，重试仍降则**保留 Claude
+原段**亲笔优先，遥测记入 `dialogue_telemetry.quote_guard`），拼接出终稿 + 合并 changes：
 
 ```text
 <PROJECT>/章节/cluster_<key>_draft/cluster_<key>_draft.txt
@@ -138,6 +215,8 @@ gen_writer.py 自动发现 `claude_scenes/`，逐场景段调 gemini 按风格�
 ## 严格禁止
 
 - 禁止把正文写到对话/工具输出里（正文只落盘到 claude_scenes/ 与拼接文件）。
+- 禁止在 `self_eval` / `applied_style` / `dialogue_telemetry` 里写第 3 节封闭清单**以外**的任何字段
+  （`changes_schema.json` 是 `additionalProperties: false`——自造字段 = apply-cluster-changes exit 2 FATAL）。
 - 禁止跳过亲笔写作直接让 gen-model 从零生成（gen_writer 已无该路径，缺 claude_scenes 即 FATAL）。
 - 禁止调用 splitter。
 - 禁止生成或回写 factual 状态。

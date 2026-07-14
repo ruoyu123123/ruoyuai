@@ -359,3 +359,201 @@ def test_parse_and_apply_no_before_content_does_not_block():
         written, summary, rejected = gf.parse_and_apply(reply, root)
         assert len(written) == 1
         assert not rejected
+
+
+# ============ ⑤ 路径基座单一口径（--files / --report-file / --brief 全部相对 --project） ============
+# 真机 e2e：--files 相对 --project 解析、--report-file 却按 CWD 解析（双基座），
+# 调用方连撞 2 次 file-not-found。锁死「同一脚本内所有路径参数同基座」。
+import json as _json          # noqa: E402
+import os as _os              # noqa: E402
+import subprocess as _sp      # noqa: E402
+
+_GEN_FIXER = Path(__file__).resolve().parents[1] / "core" / "scripts" / "gen_fixer.py"
+
+
+def _mk_fixer_project(td: Path):
+    """造一个最小 cluster 项目：草稿 + changes.json + reflector 报告（都在项目内）。"""
+    draft_dir = td / "章节" / "cluster_001_draft"
+    draft_dir.mkdir(parents=True, exist_ok=True)
+    (draft_dir / "cluster_001_draft.txt").write_text("原始正文段落。" * 20, encoding="utf-8")
+    (draft_dir / "cluster_001_changes.json").write_text(
+        _json.dumps({"self_eval": {"ecas_metadata": {"cluster_id": "cluster_001",
+                                                     "cjk_actual": 1}}},
+                    ensure_ascii=False), encoding="utf-8")
+    qdir = td / "章节" / "_quality"
+    qdir.mkdir(parents=True, exist_ok=True)
+    (qdir / "reflector_R1.json").write_text(
+        _json.dumps({"issues": [{"id": "RR_R1_001", "severity": "major"}]},
+                    ensure_ascii=False), encoding="utf-8")
+    return td
+
+
+def _run_fixer(args, cwd):
+    env = {**_os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    return _sp.run([sys.executable, str(_GEN_FIXER)] + args, cwd=str(cwd),
+                   capture_output=True, text=True, encoding="utf-8",
+                   errors="replace", env=env, timeout=120)
+
+
+def test_report_file_resolves_against_project_not_cwd():
+    """--report-file 与 --files 同基座：项目内相对路径必须解析得到（CWD 在别处也能跑）。"""
+    with tempfile.TemporaryDirectory() as td:
+        proj = _mk_fixer_project(Path(td) / "proj")
+        other_cwd = Path(td) / "elsewhere"
+        other_cwd.mkdir()
+        r = _run_fixer(["--project", str(proj), "--mode", "comprehensive",
+                        "--report-file", "章节/_quality/reflector_R1.json",
+                        "--files", "章节/cluster_001_draft/cluster_001_draft.txt",
+                        "--dry-run"], cwd=other_cwd)
+        assert r.returncode == 0, f"项目相对 --report-file 应解析成功\nstderr={r.stderr}"
+        assert "FileNotFoundError" not in r.stderr
+
+
+def test_report_file_missing_is_loud_fatal_not_traceback():
+    """--report-file 真不存在 → [FATAL] + exit 2（不降级、不裸崩 FileNotFoundError）。"""
+    with tempfile.TemporaryDirectory() as td:
+        proj = _mk_fixer_project(Path(td) / "proj")
+        r = _run_fixer(["--project", str(proj), "--mode", "comprehensive",
+                        "--report-file", "章节/_quality/不存在.json",
+                        "--files", "章节/cluster_001_draft/cluster_001_draft.txt",
+                        "--dry-run"], cwd=proj)
+        assert r.returncode == 2, f"缺 report 必须 exit 2，实际 {r.returncode}"
+        assert "[FATAL" in r.stderr
+        assert "Traceback" not in r.stderr, "契约错误必须响亮报错，不能裸崩 traceback"
+
+
+def test_no_cwd_relative_path_arg_remains():
+    """回归锁：源码里不得再出现 CWD 基座的裸 Path(args.<path>) 读取（双基座根因）。"""
+    src = _GEN_FIXER.read_text(encoding="utf-8")
+    assert "Path(args.report_file).read_text" not in src
+    # 三个路径参数都必须过 is_absolute() → project_root 解析
+    for arg in ("args.report_file", "args.brief"):
+        assert f"{arg}" in src
+    assert src.count("is_absolute()") >= 4
+
+
+# ============ ⑥ 改稿后 changes.json 字数遥测回写（changes_io 单一真理源） ============
+def test_run_scanners_forces_utf8_child_env():
+    """子进程 scanner 必须强制 PYTHONIOENCODING=utf-8（GBK 环境下 CJK stdout 会 mojibake）。"""
+    src = _GEN_FIXER.read_text(encoding="utf-8")
+    assert "PYTHONIOENCODING" in src and "PYTHONUTF8" in src
+
+
+def test_main_syncs_changes_cjk_after_fix(monkeypatch):
+    """核心回归锁：gen_fixer 改稿落盘后必须回写 changes.json 的 cjk_actual。
+
+    真机实测 desync（changes 12055 vs 草稿 12004）→ writer_truth_check 判 writer 说谎
+    → cluster-save-state step 3 阻断。此处锁死 main() 走 changes_io 回写。
+    """
+    import changes_io  # noqa: E402
+    import writer_truth_check as wtc  # noqa: E402
+
+    with tempfile.TemporaryDirectory() as td:
+        proj = _mk_fixer_project(Path(td) / "proj")
+        rel = "章节/cluster_001_draft/cluster_001_draft.txt"
+        fixed_body = "修复后的正文段落。" * 18  # 与原文同量级（过 CJK 守恒）
+
+        monkeypatch.setattr(gf, "GenModelLoader", lambda *a, **k: _FakeLoader())
+        monkeypatch.setattr(gf, "call_gen_model",
+                            lambda loader, system, user: (
+                                _reply_with_file(rel, fixed_body), _profile("mock")))
+        monkeypatch.setattr(gf, "run_scanners", lambda paths: {})
+        monkeypatch.setattr(sys, "argv", [
+            "gen_fixer.py", "--project", str(proj), "--mode", "polish",
+            "--files", rel, "--instructions", "把第 3 段收紧"])
+
+        gf.main()
+
+        changes = _json.loads(
+            (proj / "章节" / "cluster_001_draft" / "cluster_001_changes.json")
+            .read_text(encoding="utf-8"))
+        meta = changes["self_eval"]["ecas_metadata"]
+        real = changes_io.count_cjk((proj / rel).read_text(encoding="utf-8"))
+        assert meta["cjk_actual"] == real, "改稿后 cjk_actual 必须对齐新草稿真值"
+        assert meta["word_count_cjk"] == real
+        # end-to-end：writer_truth_check 不再报 cjk 说谎 → save-state 放行
+        rep = wtc.truth_check_cluster(proj, "cluster_001")
+        assert rep["lie_count"] == 0, rep["lies_detected"]
+
+
+class _FakeLoader:
+    """main() 里只用到 get_active_profile / get_fallback_chain（call_gen_model 已被打桩）。"""
+    env_path = "(fake)"
+
+    def get_active_profile(self):
+        return _profile("mock")
+
+    def get_fallback_chain(self):
+        return []
+
+
+# ============ ⑦ checker brief 统一契约（version=2 + draft_path·cluster-only） ============
+def _mk_brief(proj: Path, payload: dict, name="cluster_001_voice.json") -> str:
+    bdir = proj / "_数据库" / ".checker_briefs"
+    bdir.mkdir(parents=True, exist_ok=True)
+    (bdir / name).write_text(_json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return f"_数据库/.checker_briefs/{name}"
+
+
+def test_voice_fix_accepts_v2_draft_path_brief():
+    """voice-checker 真机形态 brief（version=2 + carrier=cluster + draft_path）→ voice-fix 可跑通（dry-run）。"""
+    with tempfile.TemporaryDirectory() as td:
+        proj = _mk_fixer_project(Path(td) / "proj")
+        rel = _mk_brief(proj, {
+            "version": 2, "carrier": "cluster", "cluster_id": "cluster_001",
+            "draft_path": "章节/cluster_001_draft/cluster_001_draft.txt",
+            "checker": "novel-voice-checker",
+            "violations": [{"line_start": 1, "line_end": 1, "original": "原始正文段落。",
+                            "issue": "voice_drift", "fix_hint": "按角色短句改写"}],
+        })
+        r = _run_fixer(["--project", str(proj), "--mode", "voice-fix",
+                        "--brief", rel, "--dry-run"], cwd=proj)
+        assert r.returncode == 0, f"v2+draft_path brief 必须可跑\nstderr={r.stderr}"
+        assert "cluster_001_draft.txt" in r.stdout, "prompt 必须引用 cluster 草稿路径"
+
+
+def test_brief_missing_draft_path_rejected_loud():
+    """brief 缺 draft_path（含旧 chapter_path 残留形态）→ exit 3 响亮报错，不静默降级。"""
+    with tempfile.TemporaryDirectory() as td:
+        proj = _mk_fixer_project(Path(td) / "proj")
+        rel = _mk_brief(proj, {
+            "version": 2, "carrier": "cluster", "cluster_id": "cluster_001",
+            "chapter_path": "章节/cluster_001_draft/cluster_001_draft.txt",  # 旧口径
+            "violations": [],
+        })
+        r = _run_fixer(["--project", str(proj), "--mode", "voice-fix",
+                        "--brief", rel, "--dry-run"], cwd=proj)
+        assert r.returncode == 3, f"缺 draft_path 必须 exit 3，实际 {r.returncode}"
+        assert "draft_path" in r.stderr
+
+
+def test_brief_version_1_rejected_with_regenerate_hint():
+    """version=1 旧 brief → exit 3，报错指向重产 brief（统一契约 version=2）。"""
+    with tempfile.TemporaryDirectory() as td:
+        proj = _mk_fixer_project(Path(td) / "proj")
+        rel = _mk_brief(proj, {
+            "version": 1, "cluster_id": "cluster_001",
+            "draft_path": "章节/cluster_001_draft/cluster_001_draft.txt",
+            "violations": [],
+        }, name="cluster_001_validator.json")
+        r = _run_fixer(["--project", str(proj), "--mode", "validator-repair",
+                        "--brief", rel, "--dry-run"], cwd=proj)
+        assert r.returncode == 3, f"version=1 必须 exit 3，实际 {r.returncode}"
+        assert "期望 2" in r.stderr
+
+
+def test_brief_prompts_consume_draft_path_and_no_dual_caliber():
+    """回归锁：两个 brief prompt 都读 draft_path；gen_fixer 源码与 checker agent 文档零 chapter_path 残留。"""
+    brief = {"version": 2, "carrier": "cluster", "cluster_id": "cluster_001",
+             "draft_path": "章节/cluster_001_draft/cluster_001_draft.txt", "violations": []}
+    for fn in (gf.build_voice_fix_prompt, gf.build_validator_repair_prompt):
+        _, user = fn(brief, "正文")
+        assert "cluster_001_draft.txt" in user, f"{fn.__name__} 必须引用 brief.draft_path"
+    # 源码级双口径锁
+    src = _GEN_FIXER.read_text(encoding="utf-8")
+    assert "chapter_path" not in src, "gen_fixer 不得残留 chapter_path 旧章节口径"
+    root = Path(__file__).resolve().parents[1]
+    for agent in ("novel-voice-checker.md", "novel-validator-checker.md"):
+        doc = (root / ".claude" / "agents" / agent).read_text(encoding="utf-8")
+        assert "draft_path" in doc, f"{agent} brief schema 必须用 draft_path"
+        assert "chapter_path" not in doc, f"{agent} 不得残留 chapter_path 旧口径"

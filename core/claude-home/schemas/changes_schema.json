@@ -173,24 +173,6 @@
             }
           }
         },
-        "mckee_truby_alignment": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "desire_pursued_this_ch": {
-              "type": "string"
-            },
-            "need_glimpsed_this_ch": {
-              "type": "string"
-            },
-            "ghost_triggered": {
-              "type": "boolean"
-            },
-            "moral_argument_advanced": {
-              "type": "boolean"
-            }
-          }
-        },
         "offscreen_actions_executed": {
           "type": "array",
           "items": {
@@ -216,6 +198,7 @@
           }
         },
         "ecas_metadata": {
+          "description": "确定性遥测命名空间：由 gen_writer.py save_output() 写入（novel-writer 只在润色后确定性核修时补 cjk_actual / post_polish_deterministic_fixes）。开放属性——本命名空间无自由文本，字段随确定性脚本演进。",
           "type": "object",
           "additionalProperties": true,
           "properties": {
@@ -229,6 +212,29 @@
             "chapter_count_decided_by_splitter": {
               "const": true
             },
+            "ch_start": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "ch_range": {
+              "type": "string"
+            },
+            "generated_by": {
+              "type": "string"
+            },
+            "generated_by_profile": {
+              "type": "string"
+            },
+            "generated_by_model": {
+              "type": "string"
+            },
+            "generated_at": {
+              "type": "string"
+            },
+            "cjk_actual": {
+              "type": "integer",
+              "minimum": 0
+            },
             "word_count_cjk": {
               "type": "integer",
               "minimum": 0
@@ -237,7 +243,16 @@
               "type": "integer",
               "minimum": 0
             },
+            "length_telemetry": {
+              "type": "object"
+            },
             "polish": {
+              "type": [
+                "array",
+                "object"
+              ]
+            },
+            "post_polish_deterministic_fixes": {
               "type": [
                 "array",
                 "object"
@@ -270,8 +285,69 @@
           }
         },
         "dialogue_telemetry": {
+          "description": "对话占比遥测。novel-writer 亲笔阶段填 dialogue_* / external_dialogue_ratio / quoted_inner_ratio / claude_draft_dialogue_ratio（外部引号对话与引号心声分开自评）；polished_* 由 changes_io.sync_cjk_actual 从磁盘终稿确定性回写；quote_guard 由 gen_writer 润色引号占比守恒核查确定性写入。封闭清单——novel-writer.md 逐字对齐。",
           "type": "object",
-          "properties": {}
+          "additionalProperties": false,
+          "properties": {
+            "dialogue_cjk": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "dialogue_ratio": {
+              "type": "number",
+              "minimum": 0
+            },
+            "external_dialogue_ratio": {
+              "type": "number",
+              "minimum": 0
+            },
+            "quoted_inner_ratio": {
+              "type": "number",
+              "minimum": 0
+            },
+            "claude_draft_dialogue_ratio": {
+              "type": "number",
+              "minimum": 0
+            },
+            "polished_dialogue_cjk": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "polished_dialogue_ratio": {
+              "type": "number",
+              "minimum": 0
+            },
+            "quote_guard": {
+              "description": "gen_writer 段级润色引号占比守恒核查遥测（几段触发/重试/保留 Claude 原段）。",
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "scenes_triggered": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "scenes_retried": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "scenes_kept_claude": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "floor_ratio": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "min_abs_drop": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              }
+            },
+            "note": {
+              "type": "string"
+            }
+          }
         }
       }
     }

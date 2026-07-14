@@ -108,6 +108,7 @@ tools: Read, Write
 
 - **命门**：`surface_role`/`ghost.surface_driver` 里**绝不能剧透** `true_role`/`ghost.wound`——同 `surface_clue` 不剧透 `hidden_payoff`。`true_role` 写真实身份给 Claude 侧/人物卡存，写手到 `concealed_until_cluster` 才见。
 - 默认安全：**普通角色不标 `true_role`/`concealed_until_cluster`/`surface_role` = 明线原样**。
+- 🔴 **主角卡 `role` 契约**：主角人物卡的 `role` **必须以「主角」开头**（如 `"主角"` 或 `"主角·炎帝幼女·不甘认命"`——自由描述接在「主角」之后）；配角/反派卡写 `"配角"`/`"反派"` 等。这是全仓主角反查（`protagonist_lookup`）+ pov/结构/风格 scanner 的**公共基线**：`role` 直接写成自由文学描述（如 `"炎帝幼女·…执念主角之一"`）而不以「主角」开头，`db_schema_validate` 会判 `PROTAGONIST_ROLE_NOT_CANONICAL` 契约错误，且下游 scanner 主角基线全部落空。隐藏身份角色的 `surface_role`/`true_role` 是**另一套**明暗线字段，与此处 `role` 前缀契约不冲突（隐藏身份角色的 `role` 仍按明面身份填，普通角色不受影响）。
 
 ### B. 幕后关系（关系 · `_sanitize_relationship`）
 

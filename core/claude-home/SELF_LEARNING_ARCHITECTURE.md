@@ -37,7 +37,7 @@
   adaptive 捕获   (ACTION_MAP)                  (幂等)        regression 检测     │
   内部 subprocess                                                               │
         ▲                      ⑥ Orchestrator（plan_tracker + step_completion_monitor）│
-        └──────── 缺步监控（假完成/失败/未跑）+ 幂等补产出 + WAL 断点 ←─────────────────┘
+        └──────── 缺步监控（假完成/失败/未跑）+ 幂等补产出 + plan 断点 ←────────────────┘
 ```
 
 **数据流**：脚本崩溃 → Monitor 捕获指纹写 incidents.jsonl → self_heal_engine 复发计数+分类入 kb →
@@ -75,7 +75,7 @@ Orchestrator 横贯保证不漏步、可补、可断点续跑。
 - step_completion_monitor 扫 plan 实例，检测三类缺步：**output_missing**（completed 但 expected_outputs 缺=假完成）/ **failed** / **not_run**（中断未跑）。
 - `--auto-heal`：对有 scripts 的假完成/失败 step → 经 adaptive_runner **幂等重跑**补产出（去 `|| true`、跳过 `#` 行、替换 `{project_root}`）；
   agent 类 / not_run → 输出 brief 给主代理（脚本不 spawn agent、不替主代理跑流程）。
-- 把 plan_tracker 从「缺步则拦」升级为「缺步可补」；WAL（`completed_steps`）保留断点续跑。
+- 把 plan_tracker 从「缺步则拦」升级为「缺步可补」；断点续跑点由 `wal_recovery.py` 读 plan JSON 的第一个未完成 step 决定（`.wal/` 只存产物与回执，不承载 step 进度）。
 
 ---
 

@@ -42,6 +42,7 @@ ENTITY_STATS_PATH: <确定性实体统计>
 - `characters` 必须列出本块正文中所有有名、有稳定身份或承担剧情功能的角色。
 - 已有角色必须复用人物卡 id；新角色使用稳定 `C_*` id。
 - `new=true` 的角色必须给 `first_cluster=CLUSTER_ID`。
+- 🔴 `role` 是「分类 + 身份」：**主角卡 `role` 必须以「主角」开头**（如 `"主角·守夜人"`——身份/职业接在「主角」后面），配角/反派写 `"配角"`/`"反派"` 或其身份。这是全仓主角反查（`protagonist_lookup`）+ pov/结构/风格 scanner 的公共基线，主角 `role` 写成纯职业（如 `"守夜人"`）不以「主角」开头会让 `db_schema_validate` 判 `PROTAGONIST_ROLE_NOT_CANONICAL` 契约错误、下游 scanner 主角基线落空。
 - `state_changes` 只记本块明确发生的受伤、死亡、身份揭示、能力变化、物件得失等，
   每条使用 `changed_at_cluster=CLUSTER_ID`。
 - 新角色可从正文提取 `recognition_anchors` 和 `negative_facts`。正文无证据就省略。
@@ -103,7 +104,7 @@ ENTITY_STATS_PATH: <确定性实体统计>
     {
       "id": "C_PROT",
       "name": "伊莱",
-      "role": "守夜人",
+      "role": "主角·守夜人",
       "status": "alive",
       "tier": "core",
       "new": false,

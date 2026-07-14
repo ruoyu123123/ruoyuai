@@ -139,7 +139,16 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 │   ├── .distill_character/{角色}_claude_drafts/ # novel-replica-writer 草稿
 │   │   ├── sample_*.txt                       # style/anti JSON 样本草稿
 │   │   └── agent_report.json                  # 角色、素材与样本绑定回执
-│   ├── .wal/                                  # WAL 写前日志（cluster 流水线）
+│   ├── .plans/<plan_id>.json                  # 🔴 plan_tracker 持久态 = 续跑点唯一真相源（steps[].status）
+│   ├── .wal/                                  # 流水线各 step 的产物与回执存放区（非断点日志）
+│   │   ├── cluster_{key}_summary.json          # summarizer 产
+│   │   ├── cluster_{key}_archive.json          # archivist 产 → apply_archive 回库
+│   │   ├── cluster_{key}_state_delta.json      # state-tracker 产 + *_state_tracker_receipt.json
+│   │   ├── cluster_{key}_*_receipt.json        # 各 required step 完成回执（SHA-256 绑定）
+│   │   ├── cluster_{key}_titles.json           # titler 亲笔 → *_title_apply_receipt.json
+│   │   ├── splitter_cluster_{key}_decisions.json # splitter 切点决策
+│   │   ├── inspiration_cards.json / volume_arc_*.json # outline 阶段产物
+│   │   └── cluster_{key}_schema_validate.json  # step1 db_schema_validate --report-out 确定性校验报告（result/errors_count/warnings_count/时间戳）
 │   └── .lock                                  # 项目锁
 │
 ├── 章节/                                       # cluster 草稿 + splitter 后章节产物
@@ -505,6 +514,10 @@ cluster 级客观状态变更的权威源是 Claude 梳理 + 确定性回库：
 - 伏笔：`novel-foreshadower` 的 JudgeReport + outline brief 梳理，非 writer 自报。
 
 `cluster-save-state` step 11 的完成证明是 `_数据库/.wal/cluster_<key>_post_state_receipt.json`。`cluster_post_state_receipt.py` 只在本 cluster 的状态更新/评估回执、全量跨块 wrapper、世界演化回执和 Judge consensus 决策均通过内容校验后生成，并按字节 SHA-256 绑定这些动态产物；常驻数据库文件不能替代 required 执行证明。
+
+**收尾 step 的可验证产物**：`cluster-write` step 7 与 `cluster-save-state` step 14 是「plan 最终校验」步。`plan_end_receipt.py` 逐条核对本 plan 前置 required step 真完成（`status=completed` 且 `verified_outputs` 实体文件仍在磁盘）→ 写收尾回执 `_数据库/.wal/cluster_<key>_write_end.json` / `cluster_<key>_save_state_end.json`；任一步假完成（`verified_outputs` 为空 = 从未跑输出校验）或产物丢失 → `[FATAL]` exit 2，收尾 step 不得标完成。收尾 step 的 `expected_outputs` 是这份回执文件，**不是裸目录**——目录形态 expected_output 只要目录存在就永远校验通过（零校验），且会被 PostToolUse 观察 hook 误判成任意子文件写入的产物。
+
+**PostToolUse 观察 hook 纪律**（`hooks/posttooluse_plan_check.py`）：它只观察 Write/Edit 产物与活跃 plan 的对应关系，**绝不越权替主代理写 plan 状态**。路径匹配是精确文件级（归一化后完全相等或按 `/` 边界对齐的路径后缀，禁目录前缀/子串命中）；对 required 且 `skip_output_allowed != true` 的主链 step 一律不自动完成，只打提示——与 PreToolUse 防跳步守卫同一口径（前门拦跳步，后门不放行）。hook 永远 exit 0。
 
 禁止绕过 `/cluster-save-state` 做章级状态回库。
 

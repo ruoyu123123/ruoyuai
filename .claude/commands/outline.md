@@ -305,7 +305,7 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
     {
       "id": "主角1",
       "name": "",
-      "role": "主角/配角/反派",
+      "role": "主角·<自由描述>（🔴 主角卡 role 必须以「主角」开头，可在后面接自由描述如「主角·炎帝幼女·不甘认命」；配角/反派卡写「配角」「反派」等。全仓主角反查 protagonist_lookup + pov/结构/风格 scanner 以此为公共基线，不以「主角」开头会被 db_schema_validate 判 PROTAGONIST_ROLE_NOT_CANONICAL 契约错误）",
       "appearance": "",
       "personality": "",
       "voice_pack": {
@@ -641,7 +641,7 @@ python core/scripts/db_schema_validate.py "workspace/novels/<书名>"
 
 15. Write `小说_书名/.gitignore` — 排除临时文件
 ```
-# WAL 预写日志（临时文件，崩溃恢复后自动清理）
+# 流水线产物与回执（不入 git·永久保留不自动清理）
 _数据库/.wal/
 
 # 备份文件

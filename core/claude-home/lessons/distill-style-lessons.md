@@ -134,7 +134,10 @@
 
 ### L8.3 💡 hook 关键词用词组不用单字（中文单字都是高频字）
 
-### L8.4 ⚠️ Plan 与 WAL 共存：WAL=单命令细粒度断点；Plan=跨命令粗颗粒强制
+### L8.4 ⚠️ 续跑点唯一真相源 = plan JSON；`.wal/` 只是产物区不是断点机制
+- `wal_recovery.py` 读 `_数据库/.plans/<plan_id>.json` 的 `steps[].status` 算**第一个未完成 step**。
+- `.wal/` 存的是各 step 的产物与回执（summary / archive / state_delta / receipt…），**不承载 step 进度**。
+- 禁止据任何 `.wal/` 文件判断中断/完成（cluster-save-state step 1 产物 = `cluster_<key>_schema_validate.json` 校验报告；历史项目可能遗留 0 字节 `cluster_<key>_save_state.json` 空标记，一律忽略）。
 
 ### L8.5 ⛔ PostToolUse hook 严禁拦截（永远 exit 0；拦截只交 PreToolUse）
 
