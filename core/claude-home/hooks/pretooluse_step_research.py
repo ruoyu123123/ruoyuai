@@ -54,7 +54,11 @@ def main():
     # 【安全·防 CJK fail-open】首字符类必须用 \w（unicode 感知·匹配 CJK·排除首字 -
     # 不误吞 flag）：换成 [A-Za-z0-9_] 会让中文书名 plan_id 匹配不上 → pid_m=None →
     # exit 0 静默放行调研门。与 anti_skip 同一约束。
-    pid_m = re.search(r"\bstep\s+(?:-\S+\s+)*[\"']?(\w[\w\-]*)[\"']?", command)
+    # 【安全·锚定到 plan_tracker.py step】plan_id 提取必须锚在真正的 `plan_tracker.py step`
+    # 之后——否则命令里别处的诱饵「step N」文本（如 echo "attest step 1"）会劫持提取，
+    # 把 N 当成 plan_id 误报「找不到 plan」。
+    pid_m = re.search(
+        r"plan_tracker\.py\s+step\s+(?:-\S+\s+)*[\"']?(\w[\w\-]*)[\"']?", command)
     n_m = re.search(r"--n\s+(\d+)", command)
     if not pid_m or not n_m:
         sys.exit(0)
