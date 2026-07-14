@@ -138,19 +138,35 @@ def _evaluate(cluster_id: str, body: str, changes: dict) -> dict:
             "actual": cjk_count,
         })
 
+    # ending_type 校验只在 declared 是 identify_ending_type 分类法内的类目时作 hard lie——同法比较·
+    # 可机验（如作者标「场景硬收」却写成「对话悬念」=真谎）。作者标自由文学标签（如「死兆留白钩…」·
+    # 不在分类法里）时，detector 的有限分类法无法同法比对（死兆留白式文学钩会被归「场景硬收」）→ 降
+    # advisory 不计 lie（北极星⑤:机械分类法难辨文学向钩·主观标签分歧≠作者说谎·真谎只计可机验事实）。
+    _ending_taxonomy = {name for name, _ in ENDING_TYPE_PATTERNS}
+    declared_in_taxonomy = declared_ending in _ending_taxonomy
     ending_type_match = declared_ending == detected_ending if declared_ending else None
+    ending_type_advisory = None
     if ending_type_match is False:
-        lies.append({
-            "field": "applied_style.ending_type",
-            "declared": declared_ending,
-            "actual": detected_ending,
-        })
+        if declared_in_taxonomy:
+            lies.append({
+                "field": "applied_style.ending_type",
+                "declared": declared_ending,
+                "actual": detected_ending,
+            })
+        else:
+            ending_type_advisory = {
+                "field": "applied_style.ending_type",
+                "declared": declared_ending,
+                "actual": detected_ending,
+                "note": "作者自由文学标签(非分类法类目)·detector 有限分类法难同法比对·advisory 非事实谎",
+            }
     return {
         "cluster_id": cluster_id,
         "detected_opening_type": detected_opening,
         "declared_ending_type": declared_ending,
         "detected_ending_type": detected_ending,
         "ending_type_match": ending_type_match,
+        "ending_type_advisory": ending_type_advisory,
         "body_cjk_count": cjk_count,
         "lies_detected": lies,
         "lie_count": len(lies),
@@ -179,6 +195,7 @@ def truth_check_cluster(project_root, cluster) -> dict:
         "declared_ending_type": result["declared_ending_type"],
         "detected_ending_type": result["detected_ending_type"],
         "ending_type_match": result["ending_type_match"],
+        "ending_type_advisory": result["ending_type_advisory"],
         "body_cjk_count": result["body_cjk_count"],
         "lie_count": result["lie_count"],
         "lies_detected": result["lies_detected"],
