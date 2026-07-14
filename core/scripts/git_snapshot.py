@@ -21,13 +21,15 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from proc_utils import run_utf8  # noqa: E402
+
 
 def _run(args: list, cwd: Path, timeout: int = 60) -> subprocess.CompletedProcess:
     # 狩猎修：无 timeout 时用户机若配了 gpg 签名/钩子·git commit 交互等待 → 流水线挂死
+    # run_utf8：commit message / 中文路径固定 utf-8/replace 解码（proc_utils 单一真理源）
     try:
-        return subprocess.run(args, cwd=str(cwd), capture_output=True,
-                              text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout)
+        return run_utf8(args, cwd=str(cwd), timeout=timeout)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(args, 124, "", "[git_snapshot] timeout")
 

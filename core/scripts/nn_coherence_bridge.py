@@ -34,6 +34,9 @@ import tempfile
 from pathlib import Path
 
 # core/scripts/nn_coherence_bridge.py → core/ 根
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from proc_utils import run_utf8  # noqa: E402 · 子进程 UTF-8 单一真理源
+
 _CORE = Path(__file__).resolve().parent.parent
 _VENV_PY = _CORE / "ml" / ".venv" / "Scripts" / "python.exe"   # Windows venv
 _VENV_PY_POSIX = _CORE / "ml" / ".venv" / "bin" / "python"     # POSIX venv（容错）
@@ -138,12 +141,11 @@ def _run_infer(records: "list[dict]", extra_args: "list[str]", timeout: "float |
 
         env = dict(os.environ)
         env["RUOYU_COHERENCE_CKPT"] = ckpt
-        env.setdefault("PYTHONIOENCODING", "utf-8")
         try:
-            proc = subprocess.run(
+            proc = run_utf8(
                 [str(py), str(_COHERENCE_INFER), "--batch", str(in_path),
                  "--out", str(out_path), *extra_args],
-                capture_output=True, timeout=timeout or _DEFAULT_TIMEOUT, env=env,
+                env=env, text=False, timeout=timeout or _DEFAULT_TIMEOUT,
             )
         except (subprocess.TimeoutExpired, OSError) as e:
             print(f"[nn_coherence_bridge] subprocess 失败·回退启发式：{type(e).__name__}: {str(e)[:120]}",

@@ -32,6 +32,7 @@ from . import scene_jobs
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from distill_av_verify import JOBS_MANIFEST_NAME, jobs_dir_for  # noqa: E402
+from proc_utils import run_utf8  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -99,10 +100,7 @@ def _run_distill_replicate(
     ]
     t0 = time.time()
     try:
-        proc = subprocess.run(
-            cmd, timeout=timeout, capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-        )
+        proc = run_utf8(cmd, timeout=timeout)
         return proc.returncode, time.time() - t0
     except subprocess.TimeoutExpired:
         return 124, time.time() - t0
@@ -127,10 +125,7 @@ def _run_style_evaluator(
         "--output", str(output_json),
     ]
     try:
-        proc = subprocess.run(
-            cmd, timeout=timeout, capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-        )
+        proc = run_utf8(cmd, timeout=timeout)
         return proc.returncode
     except subprocess.TimeoutExpired:
         return 124
@@ -146,7 +141,8 @@ def _run_av_verify(project: Path, cluster_id: str, replica: Path, output: Path,
         "--output", str(output),
     ]
     try:
-        return subprocess.run(command, timeout=timeout).returncode
+        # 不捕获输出（直通父进程流）·仍强制子进程 UTF-8 env
+        return run_utf8(command, capture_output=False, timeout=timeout).returncode
     except subprocess.TimeoutExpired:
         return 124
 

@@ -27,9 +27,9 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from frozen_util import child_python  # frozen-aware 子解释器（dev=no-op）
+from proc_utils import run_utf8  # 子进程 UTF-8 单一真理源
 import time
 from pathlib import Path
 
@@ -373,7 +373,7 @@ def run_distill_replicate(skill: Path, project: Path, cluster_id: str, output: P
     print(f"[verify] 调 distill_replicate.py --mode cluster ...", file=sys.stderr)
     print(f"         cmd = {' '.join(cmd)}", file=sys.stderr)
     t0 = time.time()
-    r = subprocess.run(cmd, capture_output=False)  # 让 stream 直接打到 stderr
+    r = run_utf8(cmd, capture_output=False)  # 让 stream 直接打到 stderr（子进程仍强制 UTF-8）
     elapsed = time.time() - t0
     print(f"[verify] distill_replicate 耗时 {elapsed:.1f}s · exit={r.returncode}", file=sys.stderr)
     return r.returncode == 0
@@ -396,7 +396,7 @@ def run_cluster_evaluator(ref_arc: Path, gen_arc: Path, output: Path,
     if strict:
         cmd += ["--strict"]
     print(f"[verify] 调 cluster_evaluator.py ...", file=sys.stderr)
-    r = subprocess.run(cmd, capture_output=False)
+    r = run_utf8(cmd, capture_output=False)
     report = {}
     if output.exists():
         try:
@@ -433,7 +433,7 @@ def run_sfs_gate(replica_path: Path, project: Path, verify_dir: Path,
     print(f"[verify] SFS 出货闸：style_evaluator --multi-ref-from-dir 原文 (对齐出货 skill_FINAL 复刻) ...",
           file=sys.stderr)
     try:
-        subprocess.run(cmd, capture_output=False)
+        run_utf8(cmd, capture_output=False)
     except Exception as e:  # noqa: BLE001 — SFS 评分崩不阻断出货（真闸在 cluster 维）
         verdict, detail = sfs_gate_decision(None, None)
         detail["reason"] = f"style_evaluator 调用异常: {e}"

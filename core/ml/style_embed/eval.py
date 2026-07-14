@@ -38,6 +38,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DATA = HERE / "data"
 REPO_ROOT = HERE.parents[2]
+
+sys.path.insert(0, str(REPO_ROOT / "core" / "scripts"))
+from proc_utils import run_utf8  # noqa: E402 · 子进程 UTF-8 单一真理源
 CJK_RE = re.compile(r"[一-鿿]")
 
 
@@ -204,7 +207,6 @@ def sfs_compare(enc: Encoder, replica_dir: Path, seed=42):
     embedding-SFS = cosine(复刻文 chunk 均值, 该作者原文 centroid)。
     """
     import numpy as np
-    import subprocess
     files = sorted(replica_dir.glob("*.txt"))
     if not files:
         print(f"[sfs] {replica_dir} 无 .txt, 跳过"); return {}
@@ -244,7 +246,7 @@ def _clean(t: str) -> str:
 
 
 def _run_style_evaluator(gen: Path, ref_dir: Path):
-    import subprocess, tempfile, os
+    import tempfile
     se = REPO_ROOT / "core" / "scripts" / "style_evaluator.py"
     if not se.exists():
         return None
@@ -253,7 +255,7 @@ def _run_style_evaluator(gen: Path, ref_dir: Path):
            "--multi-ref-from-dir", str(ref_dir), "--multi-ref-count", "5",
            "--output", str(out)]
     try:
-        subprocess.run(cmd, timeout=300, capture_output=True)
+        run_utf8(cmd, timeout=300, text=False)
         d = json.loads(out.read_text(encoding="utf-8"))
         return d.get("sfs_quick") or d.get("sfs_score") or d.get("overall_score")
     except Exception:

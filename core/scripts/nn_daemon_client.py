@@ -32,6 +32,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from proc_utils import popen_utf8  # noqa: E402 · 子进程 UTF-8 单一真理源（daemon 日志按 UTF-8 落字）
+
 _CORE = Path(__file__).resolve().parent.parent   # core/scripts → core
 _VENV_PY = _CORE / "ml" / ".venv" / "Scripts" / "python.exe"   # Windows venv
 _VENV_PY_POSIX = _CORE / "ml" / ".venv" / "bin" / "python"     # POSIX venv（容错）
@@ -209,7 +212,7 @@ def _spawn_daemon(venv_py: Path) -> None:
     else:
         kwargs["start_new_session"] = True
     try:
-        subprocess.Popen(
+        popen_utf8(
             [str(venv_py), str(_DAEMON_SCRIPT)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             cwd=str(_DAEMON_SCRIPT.parent),

@@ -12,6 +12,7 @@ import atomic_json
 import cluster_lookup
 import state_cli_guard
 from frozen_util import child_python, scripts_dir
+from proc_utils import run_utf8
 
 
 SCRIPT_DIR = scripts_dir()
@@ -28,12 +29,8 @@ def run_one_module(name: str, script_name: str, project: Path,
         return {"name": name, "ok": False, "exit_code": None,
                 "error": f"脚本不存在: {script}"}
     try:
-        result = subprocess.run(
+        result = run_utf8(
             [child_python(), str(script), str(project), "--cluster", cluster_id],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=120,
             env=state_cli_guard.internal_env(),
         )

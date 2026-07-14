@@ -10,6 +10,7 @@ from pathlib import Path
 
 import atomic_json
 import cluster_lookup
+import protagonist_lookup
 import state_cli_guard
 
 
@@ -119,7 +120,9 @@ def get_protagonist(cards: dict) -> str:
     characters = cards.get("characters")
     if not isinstance(characters, list) or not all(isinstance(item, dict) for item in characters):
         raise RelationshipContractError("人物卡.characters 必须是 object array")
-    protagonists = [item.get("name") for item in characters if item.get("role") == "主角"]
+    # 主角位判定走 protagonist_lookup（role 自由文本兜底），保持「恰一个主角」硬契约
+    protagonists = [item.get("name") for item in characters
+                    if protagonist_lookup.is_protagonist_role(item.get("role"))]
     protagonists = [name for name in protagonists if isinstance(name, str) and name]
     if len(protagonists) != 1:
         raise RelationshipContractError(f"人物卡必须恰有一个主角，当前={len(protagonists)}")

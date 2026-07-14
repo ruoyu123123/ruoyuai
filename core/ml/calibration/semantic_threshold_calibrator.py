@@ -48,6 +48,7 @@ from embedding_store import (  # noqa: E402
     compute_embeddings_batch, cosine_similarity, embedding_method, ruoyu_style_dim,
 )
 import nn_daemon_client  # noqa: E402
+from proc_utils import run_utf8  # noqa: E402 · 子进程 UTF-8 单一真理源
 
 # 冻结引用：monkeypatch 只会重绑 `compute_embeddings_batch` 这个公开名字（供 run_calibration
 # 兜底/main() 用），不会动到这个私有引用——用它做「是否真后端」的身份判定，不受测试打桩影响。
@@ -419,9 +420,9 @@ def _content_embed_batch(texts: list) -> list:
         inp, outp = Path(td) / "in.jsonl", Path(td) / "out.jsonl"
         inp.write_text("\n".join(json.dumps({"text": t}, ensure_ascii=False) for t in texts) + "\n",
                        encoding="utf-8")
-        proc = subprocess.run([str(venv_py), str(infer), "--batch", str(inp), "--out", str(outp)],
-                              capture_output=True, timeout=1800,
-                              creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
+        proc = run_utf8([str(venv_py), str(infer), "--batch", str(inp), "--out", str(outp)],
+                        text=False, timeout=1800,
+                        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0))
         if proc.returncode != 0 or not outp.exists():
             raise RuntimeError(f"content_infer subprocess 失败 rc={proc.returncode}: "
                                f"{(proc.stderr or b'').decode('utf-8', 'replace')[-200:]}")

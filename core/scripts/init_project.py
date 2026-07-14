@@ -27,13 +27,14 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 _SCRIPTS = Path(__file__).resolve().parent
 if str(_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS))
+
+from proc_utils import run_utf8  # noqa: E402
 
 # frozen-aware 仓库根（workspace 在仓库根下·dev=仓库根·frozen 下 workspace 是用户态外部目录·
 # 但项目路径由调用方传绝对路径·此处只用相对推 styles 库）
@@ -155,9 +156,7 @@ def git_init(project_root: Path) -> int:
         print("[init_project][FATAL] git 不在 PATH，无法初始化项目仓库", file=sys.stderr)
         return 2
     try:
-        r = subprocess.run(["git", "init"], cwd=str(project_root),
-                           capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=30)
+        r = run_utf8(["git", "init"], cwd=str(project_root), timeout=30)
     except Exception as e:
         print(f"[init_project][FATAL] git init 异常: {type(e).__name__}: {e}", file=sys.stderr)
         return 2

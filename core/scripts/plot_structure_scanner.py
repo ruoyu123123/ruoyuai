@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import atomic_json  # noqa: E402
 import cluster_lookup  # noqa: E402
+import protagonist_lookup  # noqa: E402
 from beat_evidence import addressed_beats  # noqa: E402
 from narrative_scanner import detect_narrative_mode  # noqa: E402
 
@@ -90,16 +91,8 @@ def scan_beat(project_root: Path, cluster_id: str, body: str) -> dict:
 
 
 def _protagonist_name(project_root: Path) -> str | None:
-    cards = load_json(project_root / "_数据库" / "人物卡.json", {}) or {}
-    characters = cards.get("characters") or []
-    for character in characters:
-        if not isinstance(character, dict):
-            continue
-        if character.get("role") in {"主角", "protagonist"} or character.get(
-            "is_protagonist"
-        ):
-            return character.get("name") or character.get("id")
-    return None
+    """主角名（protagonist_lookup 唯一反查）。"""
+    return protagonist_lookup.resolve_protagonist(project_root)
 
 
 def scan_try_fail(project_root: Path, cluster_id: str, body: str) -> dict:

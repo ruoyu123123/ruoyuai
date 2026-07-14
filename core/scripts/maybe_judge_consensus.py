@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from atomic_json import atomic_write_json  # noqa: E402
 import cluster_lookup  # noqa: E402
 from frozen_util import child_python, scripts_dir  # noqa: E402
+from proc_utils import run_utf8  # noqa: E402
 
 
 def _cluster_id(value: str) -> str:
@@ -66,10 +67,7 @@ def run_cluster(project_root: Path, cluster_key: str, *, timeout: int = 30) -> i
         return 2
     command = [child_python(), str(consensus_script), "merge", *map(str, reports)]
     try:
-        result = subprocess.run(
-            command, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=timeout,
-        )
+        result = run_utf8(command, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"[FATAL] consensus 调度失败: {exc}", file=sys.stderr)
         return 2

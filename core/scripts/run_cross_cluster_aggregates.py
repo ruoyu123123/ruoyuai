@@ -15,6 +15,7 @@ from pathlib import Path
 
 from atomic_json import atomic_write_json
 from frozen_util import child_python, scripts_dir
+from proc_utils import run_utf8
 
 
 SCANNERS = [
@@ -133,12 +134,8 @@ def _run_scanner(
     timeout_seconds: int,
 ) -> dict:
     """执行单个顾问并返回结构化结果。"""
-    result = subprocess.run(
+    result = run_utf8(
         command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         timeout=timeout_seconds,
         env=env,
     )

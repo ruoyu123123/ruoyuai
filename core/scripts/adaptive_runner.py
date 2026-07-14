@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from frozen_util import child_python, user_data_dir as _udd  # noqa: E402
+from proc_utils import run_utf8  # noqa: E402
 
 # 系统根：incidents/circuit 是跨项目**可写**系统数据。
 REPO_ROOT = _udd()
@@ -190,8 +191,10 @@ def run_with_resilience(cmd, label, project_root=None, max_retries=None,
     while True:
         attempt += 1
         try:
-            proc = subprocess.run(run_target, shell=is_shell, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=timeout)
+            # run_utf8：强制子进程 PYTHONIOENCODING=utf-8 + PYTHONUTF8=1（proc_utils 单一真理源）。
+            # 本执行器包裹所有 required step 脚本——不强制的话子进程 CJK 输出按本地编码落字节，
+            # 被 utf-8 捕获成 mojibake，错误指纹（signature/message）直接把乱码写进 incidents.jsonl。
+            proc = run_utf8(run_target, shell=is_shell, timeout=timeout)
             stdout, stderr, rc = proc.stdout or "", proc.stderr or "", proc.returncode
         except subprocess.TimeoutExpired:
             stdout, stderr, rc = "", f"TimeoutError: 子进程超过 {timeout}s 未完成", 1

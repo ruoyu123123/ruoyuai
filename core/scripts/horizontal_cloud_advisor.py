@@ -67,6 +67,7 @@ def _strip_changes(text: str) -> str:
 
 
 from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
+import protagonist_lookup  # noqa: E402 主角反查单一真理源
 
 
 def _read_scope_summary(manifest_path) -> str:
@@ -103,19 +104,10 @@ def _read_protagonist(project_root, manifest_path) -> str:
         except (OSError, json.JSONDecodeError):
             pass
     if project_root:
-        p = Path(project_root) / "_数据库" / "人物.json"
-        if p.exists():
-            try:
-                obj = json.loads(p.read_text(encoding="utf-8"))
-                chars = obj.get("characters") if isinstance(obj, dict) else None
-                if isinstance(chars, list):
-                    for c in chars:
-                        if isinstance(c, dict) and c.get("role") in ("主角", "protagonist"):
-                            n = c.get("name")
-                            if isinstance(n, str):
-                                return n.strip()
-            except (OSError, json.JSONDecodeError):
-                pass
+        # manifest characters_focus 缺失时退全仓唯一主角反查（读 canonical 人物卡.json）
+        name = protagonist_lookup.resolve_protagonist(project_root)
+        if name:
+            return name
     return ""
 
 

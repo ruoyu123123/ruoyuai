@@ -15,6 +15,7 @@ from pathlib import Path
 
 import cluster_lookup
 import cluster_summary_reader as csr
+from proc_utils import run_utf8
 
 
 def _stable_hash_embedding(text: str, dim: int = 384) -> list[float]:
@@ -194,10 +195,10 @@ def ruoyu_style_encode_batch(texts, model: str = "author",
                 for t in texts:
                     fh.write(json.dumps({"text": (t or "")[:8000]},
                                         ensure_ascii=False) + "\n")
-            proc = subprocess.run(
+            proc = run_utf8(
                 [str(vpy), str(infer), "--model", str(mp),
                  "--input", str(inp), "--output", str(outp)],
-                capture_output=True, text=True, timeout=timeout)
+                timeout=timeout)
             if proc.returncode != 0 or not outp.exists():
                 tail = (proc.stderr or "")[-300:]
                 print(f"[embedding_store] ruoyu_style subprocess 失败"
@@ -478,8 +479,8 @@ def _content_embed_backend_batch(texts: "list[str]") -> "list[list[float] | None
                 for t in texts:
                     fh.write(json.dumps({"text": (t or "")[:8000]}, ensure_ascii=False) + "\n")
             kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-            proc = subprocess.run([str(venv_py), str(infer), "--batch", str(inp), "--out", str(outp)],
-                                  capture_output=True, timeout=1800, **kwargs)
+            proc = run_utf8([str(venv_py), str(infer), "--batch", str(inp), "--out", str(outp)],
+                            timeout=1800, **kwargs)
             if proc.returncode != 0 or not outp.exists():
                 return None
             embs = []

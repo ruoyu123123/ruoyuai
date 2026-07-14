@@ -16,6 +16,8 @@ from typing import Sequence
 from . import reward as _reward
 from . import scene_jobs
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from proc_utils import run_utf8  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DISTILL_REPLICATE = REPO_ROOT / "core" / "scripts" / "distill_replicate.py"
@@ -57,14 +59,7 @@ def _run_replicate(
     ]
     t0 = time.time()
     try:
-        proc = subprocess.run(
-            cmd,
-            timeout=timeout,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        proc = run_utf8(cmd, timeout=timeout)
         return proc.returncode, time.time() - t0
     except subprocess.TimeoutExpired:
         return 124, time.time() - t0

@@ -72,6 +72,7 @@ def _strip_changes(text: str) -> str:
 
 
 from text_metrics import count_cjk as _cjk_count  # noqa: E402 字数口径单一真理源
+import protagonist_lookup  # noqa: E402 主角反查单一真理源
 
 
 def _split_scenes(text: str):
@@ -81,21 +82,11 @@ def _split_scenes(text: str):
 
 
 def _load_protagonist_and_tolerance(project_root):
-    """返回 (protagonist_name, tolerance_set)"""
-    protag = None
+    """返回 (protagonist_name, tolerance_set)·主角走 protagonist_lookup 唯一反查。"""
     tol = set()
     if not project_root:
-        return protag, tol
-    p = Path(project_root) / "_数据库" / "人物卡.json"
-    if p.exists():
-        try:
-            obj = json.loads(p.read_text(encoding="utf-8"))
-            for c in (obj.get("characters", []) if isinstance(obj, dict) else []):
-                if isinstance(c, dict) and c.get("role") == "主角":
-                    protag = c.get("name", "")
-                    break
-        except (OSError, json.JSONDecodeError):
-            pass
+        return None, tol
+    protag = protagonist_lookup.resolve_protagonist(project_root)
     for fname in ("作者风格_FINAL.json", "作者风格.json"):
         ap = Path(project_root) / "_数据库" / fname
         if not ap.exists():

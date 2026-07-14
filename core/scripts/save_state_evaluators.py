@@ -12,6 +12,7 @@ import atomic_json
 import cluster_lookup
 import state_cli_guard
 from frozen_util import child_python, scripts_dir
+from proc_utils import run_utf8
 
 
 SCRIPT_DIR = scripts_dir()
@@ -32,12 +33,8 @@ def run_one_evaluator(name: str, script_name: str, extra_args: tuple[str, ...],
     command = [child_python(), str(script), str(project), *extra_args,
                "--cluster", cluster_id]
     try:
-        result = subprocess.run(
+        result = run_utf8(
             command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=120,
             env=state_cli_guard.internal_env(),
         )

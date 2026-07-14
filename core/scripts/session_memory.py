@@ -3,7 +3,7 @@
 
 【为什么有这个模块】
 我们已有：
-  - WAL：单命令内的细粒度断点（save_state 的 completed_steps）
+  - .wal/：各 step 的产物与回执存放区（续跑点真相源 = plan JSON 的 steps[].status）
   - plan_tracker：跨命令的强制规划（plan_id + steps + attestation）
   - learning_loop：跨章节的经验沉淀（success/failure patterns）
 但**没有 session 级跨会话记忆** —— 上次会话做了什么、未完成的 plan、最近
@@ -18,7 +18,7 @@
 让主代理 / 用户开机即知「上次到哪」。
 
 【与既有子系统的边界（一体化纪律）】
-  - WAL：不读不写（L8.4 共存约定）
+  - .wal/ 产物区：不读不写（L8.4 共存约定）
   - plan_tracker：只**读** list_plans，不修改 plan 状态 / attestation
   - learning_loop：不进经验库（session summary 是会话状态，不是写作模式）
 
@@ -40,6 +40,9 @@ import subprocess
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from proc_utils import run_utf8  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SESSIONS_DIR = REPO_ROOT / "core" / "claude-home" / ".sessions"
@@ -114,11 +117,11 @@ def _build_summary(started_at_unix: int) -> dict:
         # git log since session start
         since_iso = datetime.fromtimestamp(started_at_unix).isoformat(timespec="seconds")
         try:
-            r = subprocess.run(
+            # run_utf8：commit subject 含中文 → 固定 utf-8/replace 解码，不吃 locale
+            r = run_utf8(
                 ["git", "log", f"--since={since_iso}", "--oneline",
                  f"-{MAX_COMMITS_PER_SESSION}"],
-                cwd=str(REPO_ROOT), capture_output=True, text=True,
-                encoding="utf-8", timeout=10,
+                cwd=str(REPO_ROOT), timeout=10,
             )
             if r.returncode == 0 and r.stdout.strip():
                 summary["commits"] = [ln for ln in r.stdout.strip().splitlines()

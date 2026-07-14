@@ -24,9 +24,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 import sys
 from frozen_util import child_python, scripts_dir  # frozen-aware 子解释器/脚本目录（dev=no-op）
+from proc_utils import run_utf8
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -286,17 +286,14 @@ def trigger_cascade(project_root: Path, signals: list[str], cluster_key: str) ->
     script_dir = scripts_dir()
     try:
         unit_args = ["--cluster", cluster_key.replace("cluster_", "")]
-        subprocess.run([child_python(), str(script_dir / "skill_evolver.py"),
-                       str(project_root), "evolve"] + unit_args,
-                       capture_output=True, timeout=60, encoding="utf-8")
+        run_utf8([child_python(), str(script_dir / "skill_evolver.py"),
+                  str(project_root), "evolve"] + unit_args, timeout=60)
         triggered.append("skill_evolver evolve 已自动执行")
-        subprocess.run([child_python(), str(script_dir / "skill_evolver.py"),
-                       str(project_root), "retire"] + unit_args,
-                       capture_output=True, timeout=60, encoding="utf-8")
+        run_utf8([child_python(), str(script_dir / "skill_evolver.py"),
+                  str(project_root), "retire"] + unit_args, timeout=60)
         triggered.append("skill_evolver retire 已自动执行")
-        subprocess.run([child_python(), str(script_dir / "skill_evolver.py"),
-                       str(project_root), "promote"],
-                       capture_output=True, timeout=60, encoding="utf-8")
+        run_utf8([child_python(), str(script_dir / "skill_evolver.py"),
+                  str(project_root), "promote"], timeout=60)
         triggered.append("skill_evolver promote 已自动执行（→ universal_skill_pool）")
     except Exception as e:
         triggered.append(f"skill_evolver 触发失败: {e}")

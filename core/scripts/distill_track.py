@@ -56,6 +56,8 @@ try:
 except Exception:  # pragma: no cover - 退化路径
     _HAVE_ATOMIC = False
 
+from proc_utils import run_utf8  # noqa: E402
+
 # ---- 容差带常量（保守默认 · 高方差作者自动放宽，靠 pooled_std）----
 DEFAULT_ABS_FLOOR = 2.0    # SFS 百分制下 < 2 分的掉幅视作噪声，绝不报
 DEFAULT_STD_K = 1.5        # band = max(abs_floor, K × pooled_std)
@@ -277,10 +279,10 @@ def save_ledger(project, ledger):
 def current_git_sha(cwd=None) -> str:
     """取当前短 sha·失败返回 'unknown'（绝不抛·绝不阻断·北极星纪律）。"""
     try:
-        r = subprocess.run(
+        r = run_utf8(
             ["git", "rev-parse", "--short", "HEAD"],
             cwd=str(cwd) if cwd else None,
-            capture_output=True, text=True, timeout=10,
+            timeout=10,
         )
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.strip()

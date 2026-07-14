@@ -467,6 +467,7 @@ def _make_real_ablation_runner(project_root: Path, cluster_id: int,
 
     sys.path.insert(0, str(Path(__file__).parent))
     from frozen_util import child_python  # noqa: E402 · frozen 兼容解释器（禁写死 "python"）
+    from proc_utils import run_utf8  # noqa: E402 · 子进程 UTF-8 单一真理源
 
     proj_str = str(project_root)
     bm_script = str(Path(__file__).parent / "build_manifest.py")
@@ -483,20 +484,18 @@ def _make_real_ablation_runner(project_root: Path, cluster_id: int,
         py = child_python()
         try:
             # ① build_manifest（positional：项目路径 + 章节号）—— ABLATE_* env 在此生效
-            r1 = subprocess.run(
+            r1 = run_utf8(
                 [py, bm_script, proj_str, str(ch_start)],
-                env=env, capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=300)
+                env=env, timeout=300)
             if r1.returncode != 0:
                 print(f"[ablation·{arm}·seed{seed}] build_manifest 非0退出 "
                       f"(rc={r1.returncode})·该 seed 跳过\n{(r1.stderr or '')[:400]}")
                 return None
             # ② gen_writer（--project / --cluster int）—— 写到固定草稿路径
-            r2 = subprocess.run(
+            r2 = run_utf8(
                 [py, gw_script, "--project", proj_str,
                  "--cluster", str(cluster_id)],
-                env=env, capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=900)
+                env=env, timeout=900)
             if r2.returncode != 0:
                 print(f"[ablation·{arm}·seed{seed}] gen_writer 非0退出 "
                       f"(rc={r2.returncode})·该 seed 跳过\n{(r2.stderr or '')[:400]}")

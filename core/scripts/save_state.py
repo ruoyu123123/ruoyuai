@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import cluster_lookup
 import cluster_state_delta as _state_contract
 from log_util import get_logger
+from proc_utils import run_utf8
 from save_state_common import (
     TERMINAL_STATE_VALUES,
     load_json,
@@ -48,15 +49,7 @@ logger = get_logger(__name__)
 def _run_required(args: list[str], *, cwd: Path | None = None, timeout: int = 180) -> subprocess.CompletedProcess:
     """运行 required 子命令；任何非 0、超时或启动异常都抛错。"""
     try:
-        r = subprocess.run(
-            args,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
+        r = run_utf8(args, cwd=cwd, timeout=timeout)
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"required command timeout after {timeout}s: {' '.join(args)}") from exc
     except Exception as exc:  # noqa: BLE001
@@ -640,10 +633,10 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
     # Step 2: ingest cluster audit → _recurrence_tracker / _waiver_tracker
     if audit_path.is_file():
         try:
-            r = subprocess.run(
+            r = run_utf8(
                 [child_python(), str(learning_loop), project_str, "--ingest",
                  audit_path.relative_to(root).as_posix()],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
+                timeout=180,
             )
             if r.returncode in (0, 1):  # 1 = 检测到复发问题，不是错
                 logger.info(f"[auto-post-reflect-cluster] step 2/3 ingest OK ({audit_path.name}, rc={r.returncode})")
@@ -660,9 +653,9 @@ def cmd_auto_post_reflect_cluster(root, cluster_key):
 
     # Step 3: scan-recurring → 跨 cluster 复发追踪 + tool_calibration_suggestions
     try:
-        r = subprocess.run(
+        r = run_utf8(
             [child_python(), str(learning_loop), project_str, "--scan-recurring"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
+            timeout=180,
         )
         if r.returncode in (0, 1):
             logger.info(f"[auto-post-reflect-cluster] step 3/3 scan-recurring OK (rc={r.returncode})")
