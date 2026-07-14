@@ -5,19 +5,69 @@
   "description": "writer 在 cluster 级只产创作自评、豁免与确定性写作遥测；客观状态由 archive 和 cluster_state_delta 承载。",
   "type": "object",
   "additionalProperties": false,
-  "required": ["self_eval"],
+  "required": [
+    "self_eval"
+  ],
   "properties": {
     "self_eval": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["waivers"],
+      "required": [
+        "waivers"
+      ],
       "properties": {
         "applied_style": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "ending_type": {"type": "string"},
-            "applied_rules": {"type": "array", "items": {"type": "string"}}
+            "ending_type": {
+              "type": "string"
+            },
+            "applied_rules": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "opening_type": {
+              "type": "string"
+            },
+            "opening_line": {
+              "type": "string"
+            },
+            "opening_justification": {
+              "type": "string"
+            },
+            "ending_line": {
+              "type": "string"
+            },
+            "ending_justification": {
+              "type": "string"
+            },
+            "transitions_used": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "anchors_hit": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "core_techniques_applied": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "subtext_count": {
+              "type": "integer"
+            },
+            "hooks_count": {
+              "type": "integer"
+            }
           }
         },
         "waivers": {
@@ -25,27 +75,49 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["code", "reason"],
+            "required": [
+              "code",
+              "reason"
+            ],
             "properties": {
-              "code": {"type": "string"},
-              "reason": {"type": "string", "maxLength": 300}
+              "code": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string",
+                "maxLength": 300
+              }
             }
           }
         },
         "uncertainty_flags": {
           "type": "array",
-          "items": {"type": "string"}
+          "items": {
+            "type": "string"
+          }
         },
         "moves_used": {
           "type": "array",
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["character", "move_id", "instances"],
+            "required": [
+              "character",
+              "move_id",
+              "instances"
+            ],
             "properties": {
-              "character": {"type": "string"},
-              "move_id": {"type": "string", "pattern": "^MV_"},
-              "instances": {"type": "integer", "minimum": 1}
+              "character": {
+                "type": "string"
+              },
+              "move_id": {
+                "type": "string",
+                "pattern": "^MV_"
+              },
+              "instances": {
+                "type": "integer",
+                "minimum": 1
+              }
             }
           }
         },
@@ -53,29 +125,70 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "estimated_stress_change": {"type": "string"},
-            "violations_made": {"type": "array", "items": {"type": "string"}},
-            "alignments_made": {"type": "array", "items": {"type": "string"}},
-            "coping_behaviors_used": {"type": "array", "items": {"type": "string"}}
+            "estimated_stress_change": {
+              "type": "string"
+            },
+            "violations_made": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "alignments_made": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "coping_behaviors_used": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         },
         "storyteller_alignment": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "target_outcome_followed": {"type": "string", "enum": ["setback", "win", "auto"]},
-            "actual_outcome": {"type": "string", "enum": ["setback", "win", "neutral"]},
-            "phase_alignment_evidence": {"type": "string"}
+            "target_outcome_followed": {
+              "type": "string",
+              "enum": [
+                "setback",
+                "win",
+                "auto"
+              ]
+            },
+            "actual_outcome": {
+              "type": "string",
+              "enum": [
+                "setback",
+                "win",
+                "neutral"
+              ]
+            },
+            "phase_alignment_evidence": {
+              "type": "string"
+            }
           }
         },
         "mckee_truby_alignment": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "desire_pursued_this_ch": {"type": "string"},
-            "need_glimpsed_this_ch": {"type": "string"},
-            "ghost_triggered": {"type": "boolean"},
-            "moral_argument_advanced": {"type": "boolean"}
+            "desire_pursued_this_ch": {
+              "type": "string"
+            },
+            "need_glimpsed_this_ch": {
+              "type": "string"
+            },
+            "ghost_triggered": {
+              "type": "boolean"
+            },
+            "moral_argument_advanced": {
+              "type": "boolean"
+            }
           }
         },
         "offscreen_actions_executed": {
@@ -83,11 +196,22 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["character", "action_index", "completed_fully"],
+            "required": [
+              "character",
+              "action_index",
+              "completed_fully"
+            ],
             "properties": {
-              "character": {"type": "string"},
-              "action_index": {"type": "integer", "minimum": 0},
-              "completed_fully": {"type": "boolean"}
+              "character": {
+                "type": "string"
+              },
+              "action_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "completed_fully": {
+                "type": "boolean"
+              }
             }
           }
         },
@@ -95,13 +219,59 @@
           "type": "object",
           "additionalProperties": true,
           "properties": {
-            "cluster_id": {"type": "string", "pattern": "^cluster_[0-9]{3,}$"},
-            "writer_mode": {"const": "claude_draft_gemini_polish_v29"},
-            "chapter_count_decided_by_splitter": {"const": true},
-            "word_count_cjk": {"type": "integer", "minimum": 0},
-            "paragraph_count": {"type": "integer", "minimum": 0},
-            "polish": {"type": ["array", "object"]}
+            "cluster_id": {
+              "type": "string",
+              "pattern": "^cluster_[0-9]{3,}$"
+            },
+            "writer_mode": {
+              "const": "claude_draft_gemini_polish_v29"
+            },
+            "chapter_count_decided_by_splitter": {
+              "const": true
+            },
+            "word_count_cjk": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "paragraph_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "polish": {
+              "type": [
+                "array",
+                "object"
+              ]
+            }
           }
+        },
+        "writer_mode": {
+          "type": "string"
+        },
+        "cluster_id": {
+          "type": "string"
+        },
+        "narrative_mode": {
+          "type": "string"
+        },
+        "narrative_pov_mode": {
+          "type": "string"
+        },
+        "scene_count": {
+          "type": "integer"
+        },
+        "claude_draft_cjk": {
+          "type": "integer"
+        },
+        "foreshadowing_planted_surface": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dialogue_telemetry": {
+          "type": "object",
+          "properties": {}
         }
       }
     }
