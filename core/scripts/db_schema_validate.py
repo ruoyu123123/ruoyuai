@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import protagonist_lookup
+import world_evolution_engine
 from atomic_json import load_json_strict
 
 
@@ -186,6 +187,27 @@ def check_protagonist_contract(db_root: Path) -> list[str]:
         f"缺 canonical 主角位 = 契约债，请把主角卡 role 改成「主角·<原描述>」"
     )
     return errors
+
+
+def check_ripple_rules_contract(db_root: Path) -> list[str]:
+    """涟漪规则 producer 契约（error 级 hard·死规则/形态破损=载荷破损，性质同 RIPPLE_RULES_EMPTY）。
+
+    [2026-07-15 衔石与朝云 cluster_002 真机实证] outline 产的规则库两类契约债：
+    ① 文本触发词错标 trigger_type=fate_event → 任何通路都永不点火（死规则·零报警）；
+    ② ripples 写成 {"op","target","note"} 形态 → engine apply 时刻 ValueError 硬炸（写前才炸）。
+    判定逻辑全部来自 world_evolution_engine.validate_rules_contract（形态清单单一真理源·
+    禁止在此手抄一份——会漂移）。空/缺失 ripple_rules 归 RIPPLE_RULES_EMPTY 载荷闸，不双报。
+    """
+    path = db_root / "涟漪规则.json"
+    if not path.exists():
+        return []
+    data = _safe_load(path)
+    if not isinstance(data, dict):
+        return []  # JSON 坏损由载荷/骨架校验层报，不双报
+    if not data.get("ripple_rules"):
+        return []  # 空载荷归 RIPPLE_RULES_EMPTY hard gate
+    return [f"[RIPPLE_RULE_CONTRACT] 涟漪规则.{e}"
+            for e in world_evolution_engine.validate_rules_contract(data)]
 
 
 def check_foreshadow_lifecycle(db_root: Path) -> tuple[list[str], list[str]]:
@@ -600,6 +622,10 @@ def revalidate_after_manual(file_path: Path) -> int:
     if stem == "人物卡":
         errors.extend(check_protagonist_contract(file_path.parent))
 
+    # 2.7) 涟漪规则：trigger 通路 + ripple 形态契约（engine 单一真理源·死规则/apply 硬炸防线）
+    if stem == "涟漪规则":
+        errors.extend(check_ripple_rules_contract(file_path.parent))
+
     # 3) C03 载荷非空（涟漪规则/事件簇·大势卡已由 step2 覆盖不重复）
     if stem not in _LOAD_BEARING_DEDICATED:
         lb = _eval_single_load_bearing(stem, obj)
@@ -626,6 +652,9 @@ def revalidate_after_manual(file_path: Path) -> int:
         print("  · PROTAGONIST_ROLE_NOT_CANONICAL → 人物卡主角卡 role 改成「主角·<原描述>」")
         print("  · GRAND_TREND_* → ME 池每条带 id+volume·每卷 ≥1 is_volume_finale·prereq 指向存在 ME")
         print("  · FORESHADOW_STATUS_INVALID → promises[].status 只能是 open/suspended/consumed")
+        print("  · RIPPLE_RULE_CONTRACT → fate_event 只配 ME id（ME-V<卷>-<序>）/ auto_tick 只配 every_cluster/"
+              "文本触发词标 minor_event；ripple 用 {\"narrative\"}（无 target）/{\"target\",\"delta\"}/"
+              "{\"target\",\"advance\"} 等 canonical 形态，禁 op/note 字段")
         print("  · LOAD_BEARING_EMPTY → 涟漪规则 rules / 事件簇 clusters[0].scene_storyboard 不可清空")
         print("  · 修复后重新执行本命令，确认结构契约通过")
         return 2
@@ -719,6 +748,9 @@ def main():
     gt_errs, gt_warns = check_grand_trend_structure(db_root)
     total_errors.extend(gt_errs)
     total_warnings.extend(gt_warns)
+
+    # 🔴 2026-07-15 衔石与朝云实证：涟漪规则 trigger 通路 + ripple 形态契约（死规则/apply 硬炸 → errors·hard）
+    total_errors.extend(check_ripple_rules_contract(db_root))
 
     # 🔴 2026-06-27 C02：live-consumed 子系统空内容 advisory 背板（仅 warnings·不改 exit）
     total_warnings.extend(check_consumed_but_empty(db_root))

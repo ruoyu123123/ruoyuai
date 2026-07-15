@@ -319,6 +319,140 @@ def test_report_out_rejected_outside_full_validation_mode(monkeypatch, capsys):
             assert not (root / "r.json").exists(), "非全库校验模式不得写报告"
 
 
+# ============ 涟漪规则 producer 契约（2026-07-15 衔石与朝云 cluster_002 真机回归锁）============
+def _write_ripple_rules(db: Path, rules: list) -> Path:
+    p = db / "涟漪规则.json"
+    p.write_text(json.dumps({"schema_version": "v27", "ripple_rules": rules},
+                            ensure_ascii=False), encoding="utf-8")
+    return p
+
+
+def test_ripple_fate_event_with_text_trigger_is_dead_rule_error():
+    """真机原样：文本触发词错标 trigger_type=fate_event → 永不点火死规则 → error。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_ripple_rules(db, [{
+            "id": "RR_001", "trigger_type": "fate_event",
+            "trigger_match": "神农以身试毒/尝百草中毒",
+            "ripples": [{"narrative": "神格再蚀一分"}],
+        }])
+        errs = dsv.check_ripple_rules_contract(db)
+        assert any("RIPPLE_RULE_CONTRACT" in e and "永不点火" in e and "RR_001" in e for e in errs), errs
+
+
+def test_ripple_fate_event_me_id_and_multivalue_pass():
+    """fate_event 配 ME id（含 | 分隔多值）→ 合法通过。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_ripple_rules(db, [
+            {"id": "RR_F1", "trigger_type": "fate_event", "trigger_match": "ME-V1-02",
+             "ripples": [{"narrative": "大事件落地"}]},
+            {"id": "RR_F2", "trigger_type": "fate_event", "trigger_match": "ME-V1-01|ME-V2-03",
+             "ripples": [{"narrative": "多值触发"}]},
+        ])
+        assert dsv.check_ripple_rules_contract(db) == []
+
+
+def test_ripple_auto_tick_text_trigger_is_dead_rule_error():
+    """真机同根因（长恨 RR_004）：auto_tick 配文本触发词 → _match_rule 硬比对 every_cluster → 死规则 error。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_ripple_rules(db, [{
+            "id": "RR_004", "trigger_type": "auto_tick", "trigger_match": "岁月流转",
+            "ripples": [{"target": "factions_state.部族.stability", "delta": -3}],
+        }])
+        errs = dsv.check_ripple_rules_contract(db)
+        assert any("every_cluster" in e and "永不点火" in e for e in errs), errs
+
+
+def test_ripple_op_note_shape_is_error():
+    """真机原样：ripples 写成 {op/target/note} 形态 → engine 不认 → error（apply 时刻硬炸防线）。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_ripple_rules(db, [{
+            "id": "RR_003", "trigger_type": "minor_event", "trigger_match": "生灵痴执一事而死",
+            "ripples": [{"op": "narrative", "target": "factions_state.沧海东海神域", "note": "痴执至死者魂魄不散"}],
+        }])
+        errs = dsv.check_ripple_rules_contract(db)
+        assert any("RR_003" in e and "op/note" in e for e in errs), errs
+
+
+def test_ripple_narrative_with_target_is_error():
+    """narrative 形态必须无 target（带 target 落入结构化通路 → apply 硬炸）。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_ripple_rules(db, [{
+            "id": "RR_N", "trigger_type": "minor_event", "trigger_match": "触发词",
+            "ripples": [{"narrative": "文本", "target": "factions_state.某族.power"}],
+        }])
+        errs = dsv.check_ripple_rules_contract(db)
+        assert any("narrative" in e and "target" in e for e in errs), errs
+
+
+def test_ripple_canonical_shapes_all_pass():
+    """engine canonical 全形态（narrative/delta/advance/set/set_to_current_cluster/add_thread/
+    evaluate_completion/spawn/add）→ 0 error。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_ripple_rules(db, [
+            {"id": "RR_M", "trigger_type": "minor_event", "trigger_match": "夜探据点|走漏风声",
+             "ripples": [
+                 {"narrative": "叙事后果"},
+                 {"target": "factions_state.巡夜司.power", "delta": -5},
+                 {"target": "current_world_time.day", "advance": 1},
+                 {"target": "factions_state.巡夜司.current_focus", "set": "全城戒严"},
+                 {"target": "current_world_time.cluster", "set_to_current_cluster": True},
+                 {"target": "active_npc_threads",
+                  "add_thread": {"npc_id": "顾沉", "action": "彻查内鬼"}},
+                 {"target": "active_npc_threads", "evaluate_completion": True},
+                 {"target": "emergent_opportunities",
+                  "spawn": {"type": "副线", "description": "匿名信", "expires_clusters": 3}},
+                 {"target": "consequence_tracker", "add": {"event": "信任崩塌", "world_changes": []}},
+             ]},
+            {"id": "RR_T", "trigger_type": "auto_tick", "trigger_match": "every_cluster",
+             "ripples": [{"target": "current_world_time.day", "advance": 1}]},
+        ])
+        assert dsv.check_ripple_rules_contract(db) == []
+
+
+def test_ripple_empty_rules_not_double_reported():
+    """空 ripple_rules 归 RIPPLE_RULES_EMPTY 载荷闸管辖·本契约检查不双报。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        _write_ripple_rules(db, [])
+        assert dsv.check_ripple_rules_contract(db) == []
+
+
+def test_ripple_contract_wired_into_post_edit():
+    """--post-edit 涟漪规则.json 含死规则 → revalidate_after_manual exit 2。"""
+    with tempfile.TemporaryDirectory() as td:
+        db = Path(td) / "_数据库"
+        db.mkdir(parents=True)
+        p = _write_ripple_rules(db, [{
+            "id": "RR_DEAD", "trigger_type": "fate_event", "trigger_match": "尝百草中毒",
+            "ripples": [{"narrative": "文本"}],
+        }])
+        assert dsv.revalidate_after_manual(p) == 2
+
+
+def test_ripple_contract_real_book_data_passes():
+    """真机回归锁：修复后的 长恨新书 涟漪规则.json → 0 error（workspace 数据缺席时跳过）。"""
+    real = (Path(__file__).resolve().parents[1]
+            / "workspace" / "novels" / "长恨新书" / "_数据库" / "涟漪规则.json")
+    if not real.exists():
+        import pytest
+        pytest.skip("长恨新书 workspace 数据不在本机")
+    errs = dsv.check_ripple_rules_contract(real.parent)
+    assert errs == [], errs
+
+
 if __name__ == "__main__":
     fails = 0
     for nm in sorted(dir()):

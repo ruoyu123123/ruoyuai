@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import atomic_json  # noqa: E402
+import world_evolution_engine  # noqa: E402  涟漪规则契约单一真理源（validate_rules_contract）
 from reference_pattern_extract import build_reference_patterns_block  # noqa: E402  参考语料结构基线（advisory·写入 jobs 清单）
 
 
@@ -346,6 +347,16 @@ def _normalize_skeleton(cand) -> tuple:
         return None, f"卷号重复: {nums}"
     cand["volumes"] = vols
     cand.pop("major_events", None)   # ME 池分卷生成·骨架混产的丢弃（单一来源=chunk WAL）
+    # world_seed.ripple_rules（可选给出时）过 engine 契约静态验收（单一真理源·真机实证：
+    # 文本触发词错标 fate_event=永不点火死规则 / op-note 形态 ripple=apply 时刻硬炸——
+    # producer 侧挡在 _emit 落库前·破损=单元退回 pending 重写）。
+    seed = cand.get("world_seed")
+    if isinstance(seed, dict):
+        seed_rules = seed.get("ripple_rules") or seed.get("seed_rules")
+        if seed_rules:
+            rule_errs = world_evolution_engine.validate_rules_contract({"ripple_rules": seed_rules})
+            if rule_errs:
+                return None, "world_seed.ripple_rules 契约破损: " + "; ".join(rule_errs[:3])
     return cand, ""
 
 

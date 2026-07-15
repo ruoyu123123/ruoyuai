@@ -177,6 +177,67 @@ def test_spawned_opportunity_uses_cluster_window():
     assert engine.opportunity_window(opportunity, "cluster_008") == (False, -1)
 
 
+# ───────── producer 契约静态校验（单一真理源 anti-drift 回归锁·2026-07-15 衔石与朝云实证）─────────
+def test_apply_ripple_rejects_op_note_shape_with_canonical_hint():
+    """真机原样 {op/target/note} 形态 → 入口 ValueError 且报错含 canonical 修法提示。"""
+    with pytest.raises(ValueError, match="op/note"):
+        engine._apply_ripple(
+            _world(),
+            {"op": "narrative", "target": "factions_state.巡夜司", "note": "痴执至死"},
+            "cluster_001", [])
+
+
+def test_apply_ripple_rejects_narrative_with_target():
+    """narrative + target 混合形态 → 入口拒绝（canonical narrative 必须无 target）。"""
+    with pytest.raises(ValueError, match="narrative"):
+        engine._apply_ripple(
+            _world(), {"narrative": "文本", "target": "factions_state.巡夜司.power"},
+            "cluster_001", [])
+
+
+def test_validate_ripple_shape_aligned_with_apply_dispatch():
+    """anti-drift 锁：validate_ripple_shape 放行的每个 canonical 形态，_apply_ripple 必须可应用
+    （不允许出现『校验说合法、apply 说未知操作』的劈叉）。"""
+    canonical = [
+        {"narrative": "叙事后果"},
+        {"target": "factions_state.巡夜司.power", "delta": -5},
+        {"target": "current_world_time.day", "advance": 2},
+        {"target": "factions_state.巡夜司.wealth", "set": 10},
+        {"target": "current_world_time.cluster", "set_to_current_cluster": True},
+        {"target": "active_npc_threads", "add_thread": {"npc_id": "顾沉", "action": "彻查内鬼"}},
+        {"target": "active_npc_threads", "evaluate_completion": True},
+        {"target": "emergent_opportunities",
+         "spawn": {"type": "副线", "description": "匿名信", "expires_clusters": 2}},
+        {"target": "consequence_tracker", "add": {"event": "信任崩塌", "world_changes": []}},
+    ]
+    for ripple in canonical:
+        assert engine.validate_ripple_shape(ripple) is None, ripple
+        engine._apply_ripple(_world(), ripple, "cluster_003", [])  # 不得 raise
+
+
+def test_validate_trigger_contract_dead_rule_detection():
+    """fate_event 文本触发词 / auto_tick 非 every_cluster = 死规则；合法组合放行。"""
+    assert engine.validate_trigger_contract("minor_event", "神农以身试毒/尝百草中毒") is None
+    assert engine.validate_trigger_contract("fate_event", "ME-V1-01|ME-V2-03") is None
+    assert engine.validate_trigger_contract("auto_tick", "every_cluster") is None
+    assert "永不点火" in engine.validate_trigger_contract("fate_event", "尝百草中毒")
+    assert "永不点火" in engine.validate_trigger_contract("fate_event", "ME-V1-01|尝百草中毒")
+    assert "永不点火" in engine.validate_trigger_contract("auto_tick", "岁月流转")
+
+
+def test_validate_rules_contract_reports_rule_and_ripple_positions():
+    """整库校验定位到 rule 与 ripple 下标（供 db_schema_validate / 骨架验收直接转述）。"""
+    errs = engine.validate_rules_contract({"ripple_rules": [
+        {"id": "RR_OK", "trigger_type": "minor_event", "trigger_match": "触发词",
+         "ripples": [{"narrative": "合法"}]},
+        {"id": "RR_BAD", "trigger_type": "fate_event", "trigger_match": "文本触发词",
+         "ripples": [{"op": "narrative", "note": "旧形态", "target": "x"}]},
+    ]})
+    assert any("ripple_rules[1](RR_BAD)" in e and "永不点火" in e for e in errs), errs
+    assert any("ripple_rules[1](RR_BAD).ripples[0]" in e for e in errs), errs
+    assert not any("RR_OK" in e for e in errs), errs
+
+
 def test_dashboard_reports_current_cluster():
     with tempfile.TemporaryDirectory() as temp:
         root = _project(Path(temp))

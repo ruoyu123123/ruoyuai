@@ -279,6 +279,44 @@ def test_broken_skeleton_unit_goes_back_to_pending():
         assert not (proj / "_数据库" / "大势卡.json").exists()
 
 
+def test_skeleton_world_seed_bad_ripple_rules_go_back_to_pending():
+    """world_seed.ripple_rules 契约破损（2026-07-15 衔石与朝云真机：文本触发词错标 fate_event=
+    死规则 / op-note 形态 ripple=apply 硬炸）→ 骨架单元退回 pending 重写·不落库。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = _mkproj(tmp)
+        bad_seed = {**_SKELETON_1V, "world_seed": {"ripple_rules": [
+            {"id": "RR_001", "trigger_type": "fate_event",
+             "trigger_match": "神农以身试毒/尝百草中毒",
+             "ripples": [{"op": "narrative", "target": "factions_state.部族", "note": "旧形态"}]},
+        ]}}
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, bad_seed)
+        rc = _run(proj)
+        assert rc == 2
+        job = _jobs_by_unit(proj)["skeleton"]
+        assert job["status"] == "pending" and "world_seed.ripple_rules" in job["diag"]
+        assert not (proj / "_数据库" / "涟漪规则.json").exists()
+
+
+def test_skeleton_world_seed_canonical_ripple_rules_accepted():
+    """world_seed.ripple_rules 全 canonical（minor_event 文本词 / fate_event ME id / auto_tick
+    every_cluster + narrative/delta 形态）→ 骨架单元验收通过。"""
+    with tempfile.TemporaryDirectory() as tmp:
+        proj = _mkproj(tmp)
+        good_seed = {**_SKELETON_1V, "world_seed": {"ripple_rules": [
+            {"id": "RR_001", "trigger_type": "minor_event",
+             "trigger_match": "神农以身试毒/尝百草中毒",
+             "ripples": [{"target": "factions_state.部族.stability", "delta": -8},
+                         {"narrative": "死亡钟摆前移"}]},
+            {"id": "RR_F", "trigger_type": "fate_event", "trigger_match": "ME-V1-01",
+             "ripples": [{"narrative": "大事件落地"}]},
+        ]}}
+        _write_wal(proj, gva.VOLUME_ARC_SKELETON_WAL, good_seed)
+        _write_wal(proj, "volume_arc_v1.json", _chunk(1))
+        assert _run(proj) == 0
+        rr = json.loads((proj / "_数据库" / "涟漪规则.json").read_text(encoding="utf-8"))
+        assert [r["id"] for r in rr["ripple_rules"]] == ["RR_001", "RR_F"]
+
+
 def test_broken_chunk_unit_goes_back_to_pending():
     """卷单元破损（非 JSON）→ 退回 pending（重 spawn agent 覆写 expected_output）。"""
     with tempfile.TemporaryDirectory() as tmp:

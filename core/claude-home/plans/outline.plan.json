@@ -214,10 +214,11 @@
     {
       "n": 7,
       "name": "plan-end",
-      "description": "scaffold verify + db_schema_validate（含 C19 大势卡 ME 池结构契约·消费）+ git commit（初始化项目 + 生成大纲）。",
+      "description": "scaffold verify + db_schema_validate（含 C19 大势卡 ME 池结构契约 + 涟漪规则 trigger 通路/ripple 形态契约·消费）+ git commit（初始化项目 + 生成大纲）。",
       "required": true,
       "skip_output_allowed": false,
       "_doc_c19": "只读校验 34 个子系统与大势卡结构；任何 schema、类型、必填字段或 ME 引用错误都会阻断 outline 完成。",
+      "_doc_ripple_contract": "涟漪规则契约（2026-07-15 衔石与朝云实证·error 级）：fate_event 只配 ME id（ME-V<卷>-<序>·文本触发词标 fate_event=永不点火死规则）/ auto_tick 只配 every_cluster / ripple 必须是 engine canonical 形态（narrative 无 target·禁 op/note）——判定单一真理源 world_evolution_engine.validate_rules_contract。",
       "scripts": [
         "python core/scripts/scaffold_subsystems.py verify {project_root} --content",
         "python core/scripts/db_schema_validate.py {project_root}",

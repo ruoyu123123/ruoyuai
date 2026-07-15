@@ -91,19 +91,159 @@ def _record_thread_completion(world: dict, thread: dict, cluster_id: str,
     return key
 
 
+# ───────── producer 契约静态校验（单一真理源·db_schema_validate 与 volume_arc 骨架验收共用）─────────
+# 涟漪规则的形态判定只在本模块定义：_apply_ripple 入口先跑 validate_ripple_shape（apply 与校验
+# 永不漂移）；消费端 db_schema_validate.check_ripple_rules_contract 与 producer 端
+# gen_creative_volume_arc._normalize_skeleton 都导入 validate_rules_contract，禁止另抄形态清单。
+
+ME_ID_RE = re.compile(r"ME-V\d+-\d+")
+
+_CANONICAL_RIPPLE_OPS = (
+    "narrative", "delta", "advance", "set", "set_to_current_cluster",
+    "add_thread", "evaluate_completion", "spawn", "add",
+)
+
+
+def validate_ripple_shape(ripple) -> str | None:
+    """静态判定一条 ripple 是否为 _apply_ripple 可应用的 canonical 形态。
+
+    返回错误描述或 None（合法）。只查 ripple 自身形态；路径是否存在、目标现值类型
+    等需要世界状态的运行时问题由 _apply_ripple 处理。分支顺序与 _apply_ripple 一致。
+    """
+    if not isinstance(ripple, dict):
+        return "ripple 必须是 object"
+    target = ripple.get("target")
+
+    if "narrative" in ripple:
+        if target:
+            return ('narrative ripple 不可带 target（canonical 形态 {"narrative": "<文本>"}·'
+                    "带 target 会落入结构化通路 → apply 时刻 ValueError 硬炸）")
+        if not str(ripple.get("narrative") or "").strip():
+            return "narrative ripple 不可为空"
+        return None
+
+    if not isinstance(target, str) or not target:
+        return "结构化 ripple 缺少 target"
+
+    if "delta" in ripple:
+        return None if _numeric(ripple["delta"]) else f"delta ripple 要求数值增量: {target}"
+
+    if "advance" in ripple:
+        return None if _numeric(ripple["advance"]) else f"advance ripple 要求数值增量: {target}"
+
+    if "set" in ripple:
+        return None
+
+    if ripple.get("set_to_current_cluster") is True:
+        return None
+
+    if "add_thread" in ripple:
+        if target != "active_npc_threads":
+            return f"add_thread ripple 的 target 必须是 active_npc_threads: {target!r}"
+        definition = ripple["add_thread"]
+        if not isinstance(definition, dict):
+            return "add_thread 必须是 object"
+        if not str(definition.get("npc_id") or "").strip() or not str(definition.get("action") or "").strip():
+            return "add_thread 必须包含 npc_id 与 action"
+        try:
+            if int(definition.get("expected_responses", 1)) < 1:
+                return "expected_responses 必须 >= 1"
+        except (TypeError, ValueError):
+            return f"expected_responses 必须是整数: {definition.get('expected_responses')!r}"
+        return None
+
+    if ripple.get("evaluate_completion") is True:
+        return (None if target == "active_npc_threads"
+                else f"evaluate_completion ripple 的 target 必须是 active_npc_threads: {target!r}")
+
+    if "spawn" in ripple:
+        if target != "emergent_opportunities":
+            return f"spawn ripple 的 target 必须是 emergent_opportunities: {target!r}"
+        definition = ripple["spawn"]
+        if not isinstance(definition, dict):
+            return "spawn 必须是 object"
+        expires = definition.get("expires_clusters", 2)
+        if not isinstance(expires, int) or isinstance(expires, bool) or expires < 1:
+            return "expires_clusters 必须是正整数"
+        return None
+
+    if "add" in ripple:
+        if target != "consequence_tracker":
+            return f"consequence add ripple 的 target 必须是 consequence_tracker: {target!r}"
+        return None if isinstance(ripple["add"], dict) else "consequence add 必须是 object"
+
+    hint = ""
+    if "op" in ripple or "note" in ripple:
+        hint = ('·op/note 字段不被 engine 认——叙事形态应写 {"narrative": "<文本>"} 且无 target，'
+                '数值形态写 {"target","delta"} / {"target","advance"}')
+    keys = sorted(k for k in ripple if not str(k).startswith("_"))
+    return f"未知 ripple 操作（canonical 形态清单: {'/'.join(_CANONICAL_RIPPLE_OPS)}）: 键={keys}{hint}"
+
+
+def validate_trigger_contract(trigger_type: str, trigger_match: str) -> str | None:
+    """静态判定 trigger_type 与 trigger_match 形态能否在对应通路点火（死规则防线）。
+
+    与 _match_rule 的通路对齐：fate_event 的 trigger_value 永远是大势卡 ME id
+    （world_evolution_apply_cluster 传 event_id）；auto_tick 只以 every_cluster 点火；
+    走向卡文本触发词只会从 minor_event 通路来。返回错误描述或 None（合法）。
+    """
+    candidates = [p.strip() for p in str(trigger_match or "").split("|") if p.strip()]
+    if trigger_type == "fate_event":
+        bad = [c for c in candidates if not ME_ID_RE.fullmatch(c)]
+        if bad:
+            return (f"fate_event 规则的 trigger_match 必须是 ME id（ME-V<卷>-<序>·可用 | 分隔多值），"
+                    f"实际含文本触发词 {bad!r}——fate_event 通路的 trigger_value 永远是 ME id，"
+                    f"文本触发词标 fate_event = 任何通路都永不点火的死规则；文本触发词请标 minor_event")
+    elif trigger_type == "auto_tick":
+        if candidates != ["every_cluster"]:
+            return (f"auto_tick 规则的 trigger_match 必须恰为 'every_cluster'（_match_rule 硬比对），"
+                    f"实际 {trigger_match!r} = 永不点火的死规则；周期性世界漂移写 every_cluster，"
+                    f"文本触发词请标 minor_event")
+    return None
+
+
+def validate_rules_contract(rules_json) -> list[str]:
+    """静态校验整份 涟漪规则.json 的 producer 契约，返回错误描述列表（空 = 合法）。
+
+    单一真理源：基础结构复用 _normalize_rule、触发通路对齐 _match_rule、ripple 形态对齐
+    _apply_ripple。空 ripple_rules 不在此报（载荷非空归 RIPPLE_RULES_EMPTY hard gate）。
+    """
+    if not isinstance(rules_json, dict) or not isinstance(rules_json.get("ripple_rules"), list):
+        return ["涟漪规则.json 必须包含 ripple_rules array"]
+    errors: list[str] = []
+    for i, rule in enumerate(rules_json["ripple_rules"]):
+        rid = rule.get("id") if isinstance(rule, dict) else None
+        prefix = f"ripple_rules[{i}]({rid or '?'})"
+        try:
+            canonical = _normalize_rule(rule)
+        except ValueError as e:
+            errors.append(f"{prefix}: {e}")
+            continue
+        trig_err = validate_trigger_contract(canonical["trigger_type"], canonical["trigger_match"])
+        if trig_err:
+            errors.append(f"{prefix}: {trig_err}")
+        for j, ripple in enumerate(canonical["ripples"]):
+            shape_err = validate_ripple_shape(ripple)
+            if shape_err:
+                errors.append(f"{prefix}.ripples[{j}]: {shape_err}")
+    return errors
+
+
 def _apply_ripple(world: dict, ripple: dict, cluster_id: str,
                   applied_log: list[dict]) -> bool:
-    """应用一条 canonical ripple；无法定位目标路径时记录跳过。"""
+    """应用一条 canonical ripple；无法定位目标路径时记录跳过。
+
+    入口先过 validate_ripple_shape（形态契约单一真理源），分支内只做需要世界状态的运行时检查。
+    """
     cluster_id = require_cluster_id(cluster_id)
-    if not isinstance(ripple, dict):
-        raise ValueError("ripple 必须是 object")
+    shape_error = validate_ripple_shape(ripple)
+    if shape_error:
+        raise ValueError(shape_error)
     target = ripple.get("target")
     reason = str(ripple.get("reason") or "")
 
-    if "narrative" in ripple and not target:
-        text = str(ripple.get("narrative") or "").strip()
-        if not text:
-            raise ValueError("narrative ripple 不可为空")
+    if "narrative" in ripple:
+        text = str(ripple["narrative"]).strip()
         consequences = world.setdefault("narrative_consequences", [])
         if not isinstance(consequences, list):
             raise ValueError("世界状态.narrative_consequences 必须是 array")
@@ -136,8 +276,8 @@ def _apply_ripple(world: dict, ripple: dict, cluster_id: str,
             applied_log.append({"target": target, "op": "delta", "result": "skip_path_missing"})
             return False
         old, delta = parent.get(key, 0), ripple["delta"]
-        if not _numeric(old) or not _numeric(delta):
-            raise ValueError(f"delta ripple 要求数值路径与数值增量: {target}")
+        if not _numeric(old):
+            raise ValueError(f"delta ripple 要求数值目标路径: {target}")
         new = max(0, min(100, old + delta))
         parent[key] = new
         applied_log.append({
@@ -152,8 +292,6 @@ def _apply_ripple(world: dict, ripple: dict, cluster_id: str,
             applied_log.append({"target": target, "op": "advance", "result": "skip_path_missing"})
             return False
         increment = ripple["advance"]
-        if not _numeric(increment):
-            raise ValueError(f"advance ripple 要求数值增量: {target}")
         old = parent.get(key, 0)
         if old is None:
             old = 0
@@ -190,12 +328,8 @@ def _apply_ripple(world: dict, ripple: dict, cluster_id: str,
 
     if "add_thread" in ripple and target == "active_npc_threads":
         definition = ripple["add_thread"]
-        if not isinstance(definition, dict):
-            raise ValueError("add_thread 必须是 object")
         npc_id = str(definition.get("npc_id") or "").strip()
         action = str(definition.get("action") or "").strip()
-        if not npc_id or not action:
-            raise ValueError("add_thread 必须包含 npc_id 与 action")
         threads = world.setdefault("active_npc_threads", [])
         if not isinstance(threads, list):
             raise ValueError("世界状态.active_npc_threads 必须是 array")
@@ -213,8 +347,6 @@ def _apply_ripple(world: dict, ripple: dict, cluster_id: str,
             "_priority": int(definition.get("_priority", 5)),
             "_spawned_by_ripple": True,
         }
-        if thread["expected_responses"] < 1:
-            raise ValueError("expected_responses 必须 >= 1")
         threads.append(thread)
         applied_log.append({
             "target": target, "op": "add_thread",
@@ -247,14 +379,10 @@ def _apply_ripple(world: dict, ripple: dict, cluster_id: str,
 
     if "spawn" in ripple and target == "emergent_opportunities":
         definition = ripple["spawn"]
-        if not isinstance(definition, dict):
-            raise ValueError("spawn 必须是 object")
         opportunities = world.setdefault("emergent_opportunities", [])
         if not isinstance(opportunities, list):
             raise ValueError("世界状态.emergent_opportunities 必须是 array")
         expires_clusters = definition.get("expires_clusters", 2)
-        if not isinstance(expires_clusters, int) or isinstance(expires_clusters, bool) or expires_clusters < 1:
-            raise ValueError("expires_clusters 必须是正整数")
         current_number = cluster_lookup.cluster_num(cluster_id)
         opportunity = {
             "id": _next_id(opportunities, "id", "EO_"),
@@ -271,8 +399,6 @@ def _apply_ripple(world: dict, ripple: dict, cluster_id: str,
 
     if "add" in ripple and target == "consequence_tracker":
         addition = ripple["add"]
-        if not isinstance(addition, dict):
-            raise ValueError("consequence add 必须是 object")
         tracker = world.setdefault("consequence_tracker", {})
         if not isinstance(tracker, dict):
             raise ValueError("世界状态.consequence_tracker 必须是 object")

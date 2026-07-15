@@ -401,7 +401,17 @@ OUTPUT_PATH: <该单元 job.expected_output>                              # 必�
 - 🔴 **本单元不输出 `major_events`**：每卷 ME 池由 `UNIT=v<N>` 逐卷另行亲笔（骨架里混产的会被确定性丢弃）。把每卷 volume_core_conflict / volume_thread / volume_finale_signal 写扎实，给逐卷 ME 池当锚。
 - `cluster_001`: 第一个故事块的详细 brief（**只详化这一个**，后续 cluster 留涌现）：`{"narrative_mode": "in_medias_res"（黄金三章倒叙·首块固定）, "scope_summary": 这个故事块讲什么, "scene_storyboard": [4-5 个场景。倒叙排列：scene0=强冲突/灾难开场（200字内丢出核心悬念）、scene1=反转/揭底、scene2+=时间序回溯、最后接回开篇。每个场景 {"scene": 序, "summary": 场景概要}], "foreshadowing_to_plant": [本块要埋的伏笔], "research_ref": {"cache_path": ..., "anchors_used": [...], "research_topics": [...], "researcher_confidence": 0.0-1.0}}`。本骨架 storyboard 是粗排；`/outline` step 6 会再以 `ecas_cluster_brief` 模式精排成 beat 级。
 - 可选 `free_notes`：字符串，表达作者风格档独有、上面字段装不下的卷级判断（如惯用卷间钩子手法）。
-- 可选 `world_seed`：世界演化的**最小初始条件**（只播 cluster_001 开场已存在的·后续留涌现，绝不预生成全书人物表）：`{"protagonist_state": {"name", "arc_stage", "status"}, "factions_state": {1-3 个核心阵营·{"name", "power": 0-100, "stability": 0-100, "wealth": 0-100, "current_focus"}}, "ripple_rules": [2-5 条 seed 因果规则·{"id","trigger_type"(minor_event/fate_event/auto_tick),"trigger_match","ripples"}], "characters": [主角 1 张·{"id","name","role"}], "relationships": [cluster_001 已可见的关系·{"id","from","to","type"}]}`。怎么填由你按故事自由决定；脚本只确定性 reshape，不规训枚举。可整体省略，由通用兜底播种器补。
+- 可选 `world_seed`：世界演化的**最小初始条件**（只播 cluster_001 开场已存在的·后续留涌现，绝不预生成全书人物表）：`{"protagonist_state": {"name", "arc_stage", "status"}, "factions_state": {1-3 个核心阵营·{"name", "power": 0-100, "stability": 0-100, "wealth": 0-100, "current_focus"}}, "ripple_rules": [2-5 条 seed 因果规则·机器契约见下], "characters": [主角 1 张·{"id","name","role"}], "relationships": [cluster_001 已可见的关系·{"id","from","to","type"}]}`。讲什么因果由你按故事自由决定；`ripple_rules` 的机器契约由确定性验收硬校验（`world_evolution_engine.validate_rules_contract`·破损=单元退回重写）。可整体省略，由通用兜底播种器补。
+- 🔴 **world_seed.ripple_rules 机器契约**（错一条 = 永不点火死规则或引擎 apply 时刻硬炸）：每条 rule = `{"id", "trigger_type", "trigger_match", "ripples"}`。
+  - **trigger_type ↔ trigger_match 对照表**（触发通路决定 trigger_match 形态·错配 = 死规则）：
+
+    | trigger_type | trigger_match 必须是 | 通路来源 |
+    |---|---|---|
+    | `minor_event` | **文本触发词**（势力名/事件短语·可 `\|` 分隔多值） | 用户选中走向卡的事件文本 |
+    | `fate_event` | **大势卡 ME id**（`ME-V<卷>-<序>`·可 `\|` 分隔多值）——文本触发词标 fate_event = **永不点火** | ME 完成时引擎传 event_id |
+    | `auto_tick` | 恰为 `every_cluster`（其它任何文本 = **永不点火**） | 每 cluster 机械 tick |
+
+  - **ripples 形态**（每条必须恰为 canonical 形态之一·`op`/`note` 字段不被 engine 认 = apply 硬炸）：叙事 `{"narrative": "<文本>"}`（**绝不带 target**）；数值 `{"target": "<世界状态数值路径>", "delta": ±N}`；推进 `{"target": "<路径>", "advance": N}`。进阶形态（`set`/`add_thread`/`spawn`/`add`/`evaluate_completion`）参照 `core/claude-home/templates/examples/urban_supernatural_business/涟漪规则.example.json`。
 
 **铁律**：① 卷长 fluid——**绝不写 target_chapter_count / 章数**（章数由后续写作自然涌现）；② 卷 = 阶段触发点（成长/副本更迭），cluster = 阶段内小走向，stakes 递增累积成整个阶段；③ 大势已定：volumes 的方向必须收敛到 story_destiny.final_image；④ 权威分离（见上 🔴🔴）。
 
@@ -459,7 +469,8 @@ OUTPUT_PATH: <该单元 job.expected_output>                              # 必�
           "matched_rules": [
             {"rule_id": "RR_001", "matched_via": ["fate_event"],
              "effects": [{"op": "delta", "target": "factions_state.某势力.power", "delta": -10}]}
-          ]
+          ],
+          "_doc": "effects 是 emergence_transparency 的只读转述格式（带 op 键）——不是 涟漪规则.json 的 ripple authoring 形态；写 world_seed.ripple_rules 时禁用 op/note 键，用 canonical 形态（见 UNIT=skeleton 段机器契约）"
         },
         "user_choice_policy": "排序只用于展示依据；下一故事块仍由走向卡选择唯一确定"
       },
