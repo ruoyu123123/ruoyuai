@@ -217,12 +217,57 @@ def test_validate_ripple_shape_aligned_with_apply_dispatch():
 
 def test_validate_trigger_contract_dead_rule_detection():
     """fate_event 文本触发词 / auto_tick 非 every_cluster = 死规则；合法组合放行。"""
-    assert engine.validate_trigger_contract("minor_event", "神农以身试毒/尝百草中毒") is None
+    assert engine.validate_trigger_contract("minor_event", "神农以身试毒|尝百草中毒") is None
     assert engine.validate_trigger_contract("fate_event", "ME-V1-01|ME-V2-03") is None
     assert engine.validate_trigger_contract("auto_tick", "every_cluster") is None
     assert "永不点火" in engine.validate_trigger_contract("fate_event", "尝百草中毒")
     assert "永不点火" in engine.validate_trigger_contract("fate_event", "ME-V1-01|尝百草中毒")
     assert "永不点火" in engine.validate_trigger_contract("auto_tick", "岁月流转")
+
+
+def test_validate_trigger_contract_slash_separator_confusion():
+    """真机长恨 RR_001 同族坑：/ 分隔多别名会被 _match_rule 当单一整串子串比对 →
+    多值 trigger_value 双向都不命中 = 涟漪静默永不点火。权威分隔符是 |。"""
+    err = engine.validate_trigger_contract("minor_event", "神农以身试毒/尝百草中毒")
+    assert err and "权威分隔符是 |" in err and "整串" in err and "永不点火" in err
+    assert "神农以身试毒|尝百草中毒" in err  # 给出可直接抄的修法
+    # fate_event 同样拦（真机原样就是 fate_event + / 双错）
+    assert "权威分隔符是 |" in engine.validate_trigger_contract(
+        "fate_event", "神农以身试毒/尝百草中毒")
+    # | 分隔 = 合法多值
+    assert engine.validate_trigger_contract("minor_event", "神农以身试毒|尝百草中毒") is None
+    # 合法的路径/日期文本不误伤（/ 两侧不是 ≥2 字 CJK 短语）
+    assert engine.validate_trigger_contract("minor_event", "7/15 夜袭") is None
+    assert engine.validate_trigger_contract("minor_event", "山海经·卷3/页7") is None
+    # 已含 | 的混合串不报（| 已是权威分隔·/ 属于短语内容）
+    assert engine.validate_trigger_contract("minor_event", "生死一线/劫|渡劫") is None
+
+
+def test_changhen_real_ripple_rules_post_fix_zero_error():
+    """真机《长恨新书》涟漪规则（已手修 /→|）整库 0 error（防复发回归锚）。"""
+    fixed_real = {"ripple_rules": [
+        {"id": "RR_001", "trigger_type": "minor_event",
+         "trigger_match": "神农以身试毒|尝百草中毒",
+         "ripples": [{"target": "factions_state.神农氏部族.stability", "delta": -8},
+                     {"narrative": "神格再蚀一分、死兆再深一层"}]},
+        {"id": "RR_002", "trigger_type": "minor_event",
+         "trigger_match": "二女目睹亲人濒死|失怙|生离死别",
+         "ripples": [{"narrative": "女娃'不甘认命'的刚烈执念被浇灌加深"}]},
+        {"id": "RR_003", "trigger_type": "minor_event",
+         "trigger_match": "生灵痴执一事而死|溺亡沧海|夭葬巫山",
+         "ripples": [{"target": "factions_state.沧海东海神域.power", "delta": 5}]},
+    ]}
+    assert engine.validate_rules_contract(fixed_real) == []
+    # 真机多值 trigger_value 与修后规则可命中（修复前 / 整串双向子串全不中 = 0 命中）
+    assert engine.matching_rule_ids(
+        fixed_real, "minor_event", "神农以身试毒|失怙|痴执一事而死",
+    ) == ["RR_001", "RR_002"]
+    # 真机磁盘数据同口径（文件在才验·避免依赖 workspace 的环境）
+    real_path = (Path(__file__).resolve().parents[1] / "workspace" / "novels"
+                 / "长恨新书" / "_数据库" / "涟漪规则.json")
+    if real_path.exists():
+        data = json.loads(real_path.read_text(encoding="utf-8"))
+        assert engine.validate_rules_contract(data) == []
 
 
 def test_validate_rules_contract_reports_rule_and_ripple_positions():

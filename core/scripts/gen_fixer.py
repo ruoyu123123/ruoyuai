@@ -440,9 +440,20 @@ def parse_and_apply(reply: str, project_root: Path,
             pass
 
     pattern = re.compile(r'===FILE:\s*([^=]+?)\s*===\s*\n(.*?)\n===END===', re.DOTALL)
+    matches = list(pattern.finditer(reply))
+    if not matches and '===FILE:' in reply:
+        # LLM 偶发漏 ===END=== 收尾（改用 ``` fence / JSON 总结结束）→ 以「FILE 头之后到
+        # fence 闭合或 JSON 总结起始」兜底界定块体；安全性由下方 CJK ±30% 守恒硬闸保证。
+        loose = re.compile(
+            r'===FILE:\s*([^=]+?)\s*===\s*\n(.*?)(?=\n```\s*\n|\n===FILE:|\n\{\s*\n?\s*")',
+            re.DOTALL)
+        matches = list(loose.finditer(reply))
+        if matches:
+            print("[gen_fixer][WARN] 返回缺 ===END=== 收尾，已按 fence/JSON 边界兜底解析"
+                  f"（{len(matches)} 块·CJK 守恒闸仍生效）", file=sys.stderr)
     files_written = []
     rejected = []
-    for m in pattern.finditer(reply):
+    for m in matches:
         # LLM 常把 ===FILE: 路径用 markdown 反引号/引号包裹（`path` / "path"）→非绝对路径
         # 被 join 成带反引号的非法路径 OSError。剥掉首尾反引号/引号再解析。
         rel_path = m.group(1).strip().strip('`"\'').strip()

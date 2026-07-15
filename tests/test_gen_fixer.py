@@ -557,3 +557,26 @@ def test_brief_prompts_consume_draft_path_and_no_dual_caliber():
         doc = (root / ".claude" / "agents" / agent).read_text(encoding="utf-8")
         assert "draft_path" in doc, f"{agent} brief schema 必须用 draft_path"
         assert "chapter_path" not in doc, f"{agent} 不得残留 chapter_path 旧口径"
+
+
+def test_parse_and_apply_tolerates_missing_end_marker(tmp_path):
+    """回归锁：LLM 漏 ===END=== 用 ``` fence + JSON 总结收尾（真机 cluster_002 reflow 实撞）
+    → 按 fence/JSON 边界兜底解析；CJK 守恒闸仍生效。"""
+    import gen_fixer as gf
+    draft_rel = "章节/cluster_009_draft/cluster_009_draft.txt"
+    original = "旧段落一。\n\n旧段落二，字数与新稿相当维持守恒。\n"
+    target = tmp_path / draft_rel
+    target.parent.mkdir(parents=True)
+    target.write_text(original, encoding="utf-8")
+    reply = (
+        "```\n"
+        f"===FILE: {draft_rel}===\n"
+        "新段落一。\n\n新段落二，字数与旧稿相当维持守恒。\n"
+        "```\n"
+        '{\n  "p50_after": 84.3\n}\n'
+    )
+    written, summary, rejected = gf.parse_and_apply(
+        reply, tmp_path, {draft_rel: original})
+    assert len(written) == 1 and str(target) in str(written[0].get("path"))
+    assert rejected == []
+    assert "新段落二" in target.read_text(encoding="utf-8")

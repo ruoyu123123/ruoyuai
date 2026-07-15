@@ -16,6 +16,7 @@ from pathlib import Path
 
 import cluster_lookup
 from atomic_json import atomic_write_json
+from text_metrics import count_cjk as _cjk_count  # 字数口径单一真理源
 
 
 TRIGGER_TYPES = {"minor_event", "fate_event", "auto_tick"}
@@ -185,9 +186,18 @@ def validate_trigger_contract(trigger_type: str, trigger_match: str) -> str | No
 
     与 _match_rule 的通路对齐：fate_event 的 trigger_value 永远是大势卡 ME id
     （world_evolution_apply_cluster 传 event_id）；auto_tick 只以 every_cluster 点火；
-    走向卡文本触发词只会从 minor_event 通路来。返回错误描述或 None（合法）。
+    走向卡文本触发词只会从 minor_event 通路来。多别名权威分隔符是 |（_match_rule
+    只按 | 拆 candidates），/ 分隔的多别名会被当单一整串做子串比对 → 静默永不点火。
+    返回错误描述或 None（合法）。
     """
-    candidates = [p.strip() for p in str(trigger_match or "").split("|") if p.strip()]
+    raw = str(trigger_match or "")
+    candidates = [p.strip() for p in raw.split("|") if p.strip()]
+    if trigger_type in ("minor_event", "fate_event") and "/" in raw and "|" not in raw:
+        segments = [seg.strip() for seg in raw.split("/")]
+        if all(_cjk_count(seg) >= 2 for seg in segments):  # / 两侧均为 ≥2 字短语（区别于路径/日期文本）
+            return (f"trigger_match 疑用 / 分隔多别名 {raw!r}——engine 权威分隔符是 |"
+                    f"（_match_rule 只按 | 拆 candidates），/ 串会被当单一整串做子串比对"
+                    f"→ 多值触发词双向都不命中 = 涟漪静默永不点火；请改写为 {'|'.join(segments)!r}")
     if trigger_type == "fate_event":
         bad = [c for c in candidates if not ME_ID_RE.fullmatch(c)]
         if bad:

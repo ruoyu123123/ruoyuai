@@ -304,7 +304,7 @@ def test_skeleton_world_seed_canonical_ripple_rules_accepted():
         proj = _mkproj(tmp)
         good_seed = {**_SKELETON_1V, "world_seed": {"ripple_rules": [
             {"id": "RR_001", "trigger_type": "minor_event",
-             "trigger_match": "神农以身试毒/尝百草中毒",
+             "trigger_match": "神农以身试毒|尝百草中毒",
              "ripples": [{"target": "factions_state.部族.stability", "delta": -8},
                          {"narrative": "死亡钟摆前移"}]},
             {"id": "RR_F", "trigger_type": "fate_event", "trigger_match": "ME-V1-01",

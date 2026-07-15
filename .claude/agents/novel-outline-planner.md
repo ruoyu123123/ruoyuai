@@ -411,6 +411,7 @@ OUTPUT_PATH: <该单元 job.expected_output>                              # 必�
     | `fate_event` | **大势卡 ME id**（`ME-V<卷>-<序>`·可 `\|` 分隔多值）——文本触发词标 fate_event = **永不点火** | ME 完成时引擎传 event_id |
     | `auto_tick` | 恰为 `every_cluster`（其它任何文本 = **永不点火**） | 每 cluster 机械 tick |
 
+  - 🔴 **多别名分隔符必须用 `|`·禁用 `/`**：engine `_match_rule` 只按 `|` 拆分候选，`神农以身试毒/尝百草中毒` 这类 `/` 串会被当**单一整串**做子串比对——多值触发词双向都不命中 = 涟漪**静默永不点火**（`validate_trigger_contract` 对 CJK 短语间的 `/` 直接报错·单元退回重写）。
   - **ripples 形态**（每条必须恰为 canonical 形态之一·`op`/`note` 字段不被 engine 认 = apply 硬炸）：叙事 `{"narrative": "<文本>"}`（**绝不带 target**）；数值 `{"target": "<世界状态数值路径>", "delta": ±N}`；推进 `{"target": "<路径>", "advance": N}`。进阶形态（`set`/`add_thread`/`spawn`/`add`/`evaluate_completion`）参照 `core/claude-home/templates/examples/urban_supernatural_business/涟漪规则.example.json`。
 
 **铁律**：① 卷长 fluid——**绝不写 target_chapter_count / 章数**（章数由后续写作自然涌现）；② 卷 = 阶段触发点（成长/副本更迭），cluster = 阶段内小走向，stakes 递增累积成整个阶段；③ 大势已定：volumes 的方向必须收敛到 story_destiny.final_image；④ 权威分离（见上 🔴🔴）。
