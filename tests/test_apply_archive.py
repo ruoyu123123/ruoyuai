@@ -151,6 +151,30 @@ def test_idempotent_reapply():
         assert len(_load(db, "事件簇.json")["clusters"][0]["locked_facts"]) == 1
 
 
+def test_relationship_evolution_updates_in_place():
+    """回归锁：同一对角色关系演进（敌意→联盟）不能被 add-only 丢弃——
+    稳定 REL_* id 重发带新 type → 就地更新，不新增、不静默跳过。"""
+    with tempfile.TemporaryDirectory() as d:
+        db = _mk_project(Path(d))
+        _write_archive(db, "001", {
+            "characters": [{"id": "C_AMY", "name": "艾米", "tier": "extra",
+                            "first_cluster": "cluster_001"}],
+            "relationships": [{"id": "REL_PROT_AMY", "from": "C_PROT", "to": "C_AMY",
+                               "type": "青梅竹马", "note": "初识"}]})
+        aa.main([str(Path(d)), "--cluster", "001"])
+        # 关系演进：同 id/同 pair 带新 type/note 重发
+        _write_archive(db, "001", {
+            "characters": [{"id": "C_AMY", "name": "艾米", "tier": "extra",
+                            "first_cluster": "cluster_001"}],
+            "relationships": [{"id": "REL_PROT_AMY", "from": "C_PROT", "to": "C_AMY",
+                               "type": "反目成仇", "note": "背叛后决裂"}]})
+        aa.main([str(Path(d)), "--cluster", "001"])
+        rels = _load(db, "关系.json")["relationships"]
+        assert len(rels) == 1  # 不新增
+        assert rels[0]["type"] == "反目成仇"  # 就地演进
+        assert rels[0]["note"] == "背叛后决裂"
+
+
 def test_dry_run_no_write():
     with tempfile.TemporaryDirectory() as d:
         db = _mk_project(Path(d))

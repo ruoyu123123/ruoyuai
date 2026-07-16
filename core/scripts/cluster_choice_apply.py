@@ -254,13 +254,18 @@ def _write_blueprint(project_root: Path, brief: dict, clusters: list):
         bp = {}
         prog["cluster_blueprint"] = bp
     bp[cid] = {
-        "vol": brief.get("vol", 1),
+        # brief 的卷号 canonical 键是 "volume"（emergence/outline-planner 产），"vol" 是历史别名兜底
+        "vol": brief.get("volume", brief.get("vol", 1)),
         "narrative_mode": brief.get("narrative_mode", "linear"),
         "scope_summary": brief.get("scope_summary", ""),
         "foreshadowing_to_plant": brief.get("foreshadowing_to_plant", []),
         "scene_storyboard": storyboard,
         "_source": "cluster_choice_apply（程序驱动·ch 为占位·真切章由 splitter 定）",
     }
+    # 推进 schema-required 的 current_cluster：应用下一 cluster brief = 该 cluster 进入
+    # in_progress，进度指针随之前移（cluster_001 无 choice_apply，保持 skeleton 初值即正确）。
+    # db_schema_validate 要求 进度.json 含非空 current_cluster —— 此前无人回写，全程卡 cluster_001。
+    prog["current_cluster"] = cid
     try:
         from atomic_json import atomic_write_json
         atomic_write_json(prog_path, prog)

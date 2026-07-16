@@ -465,7 +465,7 @@ python core/scripts/gen_chapter_titles.py \
   --apply
 ```
 
-硬验收（脚本确定性执行）：干净度（`_is_clean_title`：无标点/无指令占位词）+ ≤14 字 + 历史严禁重复（精确相等或母题包含）。验收通过的章重写「第NNN章 标题」头 + 回填 cluster_blueprint/进度.json；全部通过落 `_数据库/.wal/cluster_<key>_title_apply_receipt.json`。
+硬验收（脚本确定性执行）：干净度（`_is_clean_title`：无标点/无指令占位词）+ ≤14 字 + 历史严禁重复（精确相等或母题包含）。验收通过的章重写「第NNN章 标题」头 + 回填 cluster_blueprint/进度.json + **回写 `title` 到 per-chapter `第NNN章_changes.json`（`export_book.read_title` 的单一来源；6.3 `split_cluster_changes` 覆盖 `_changes.json` 时会保留该 title）**；全部通过落 `_数据库/.wal/cluster_<key>_title_apply_receipt.json`。
 
 退出码：
 - 0 = 全部验收通过（或 no-op），receipt 已落盘

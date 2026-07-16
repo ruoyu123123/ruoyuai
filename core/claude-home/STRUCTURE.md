@@ -173,7 +173,7 @@ workspace/novels/{书名}/                       # 项目根（独立 Git 仓库
 - 数据库 JSON：中文命名（人物卡 / 世界观 / 伏笔表...）
 
 **正文/数据分离**：
-- `第{N}章.txt` = **纯正文**，`第{N}章_changes.json` = **结构化数据**，两者是两个物理文件，不再混在一个 txt 里靠 `---CHANGES---` 分隔符切。
+- `第{N}章.txt` = **正文**（splitter 落盘纯正文；`gen_chapter_titles --apply` 追加「第N章 标题」章头到正文首行便于逐章阅读，`export_book` 导出时确定性剥离首行章头、按 `_changes.json.title` 重拼 header），`第{N}章_changes.json` = **结构化数据**（含顶层 `title` = export 标题单一来源），两者是两个物理文件，不再混在一个 txt 里靠 `---CHANGES---` 分隔符切。
 - `第{N}章_changes.json` 由 `novel-chapter-splitter`（cluster mode · splitter 在 step 6 从 `cluster_<key>_changes.json` 按切点平铺成 per-chapter）产出，不再由 save-state 产出。
 - 所有读写章节正文 / CHANGES 的脚本必须走 `core/scripts/chapter_io.py` 统一模块（`read_body` / `read_changes` / `write_body` / `write_changes`），禁止各自 split。
 - `第{N}章_changes.json` 保存 `self_eval`、`waivers` 和确定性遥测；客观状态不由 writer 自报。
@@ -500,7 +500,7 @@ splitter 在 `/cluster-write` step 6 才把草稿切为用户可读章节：
 
 | 文件 | 标准路径 | 内容 | 由谁产出 |
 |---|---|---|---|
-| 章节正文 | `章节/第NNN章/第NNN章.txt` | 纯正文，无 CHANGES、无分隔符 | splitter |
+| 章节正文 | `章节/第NNN章/第NNN章.txt` | splitter 落盘纯正文·无 CHANGES 无分隔符；gen_chapter_titles --apply 追加章头首行·export 导出时剥离 | splitter + gen_chapter_titles |
 | 章节数据 | `章节/第NNN章/第NNN章_changes.json` | 从 cluster changes 平铺的章节级镜像 | splitter |
 
 章节文件是导出和阅读产物，不是创作入口。验证、修复、状态保存都以 cluster 为单位回到草稿层或数据库层处理。

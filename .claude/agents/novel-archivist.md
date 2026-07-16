@@ -51,6 +51,11 @@ ENTITY_STATS_PATH: <确定性实体统计>
 ### 道具、关系和硬事实
 
 - 新道具使用稳定 `I_*` id，并写 `first_cluster=CLUSTER_ID`。
+- 🔴 `items` 列表**只放本 cluster 首次引入的新道具**（`first_cluster=CLUSTER_ID`）。
+  **已有道具的持有转移（换手/夺回/遗失）绝不放进 `items`**——apply_archive 的 apply_items
+  是「只增不改 holder」且强制 `items[].first_cluster == 当前 cluster`，放旧道具（其
+  first_cluster 是原引入块）会触发 FATAL。持有转移改写进 `locked_facts`（如「I_008 复归 C_002 随身」）
+  + state delta，由 state-tracker / cluster_state_delta 承载。
 - 关系使用稳定 `REL_*` id，`from`/`to` 必须引用角色 id。
 - `locked_facts` 只记录正文已经确立、后续不可随意改写的事实。
 - 不从 brief 或大纲抄尚未发生的状态。

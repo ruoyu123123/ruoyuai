@@ -369,6 +369,62 @@ def test_enforce_short_paragraphs_protects_system_panel():
     assert out == panel, "系统面板段不切"
 
 
+def _para_metrics(text):
+    import re as _re
+    paras = [p.strip() for p in _re.split(r"\n\s*\n", text) if p.strip()]
+    plens = [len(_re.findall(r"[一-鿿]", p)) for p in paras]
+    single = sum(1 for p in paras if len(_re.findall(r"[。！？…]", p)) <= 1)
+    return len(paras), (sum(plens) / len(plens) if plens else 0), (single / len(paras) if paras else 0)
+
+
+def test_reflow_merge_dense_restores_thick_paragraphs():
+    """密实长段作者的碎化叙述稿 → 合并回厚段(段长升·单句独行率降·一字不改)。"""
+    frag = "\n\n".join([
+        "他推开门走进昏暗的房间。", "墙上挂着一幅落满灰尘的旧画像。", "地上散落着许多被撕碎的纸片。",
+        "他弯下腰捡起其中一片。", "纸上的字迹早已模糊难辨。", "窗外传来一声压抑的闷响。",
+        "他猛地转身望向门口。", "那里空无一人只有风。",
+    ])
+    n0, mean0, single0 = _para_metrics(frag)
+    out = gw.reflow_merge_dense_paragraphs(frag, author_para_mean=97.15, author_single=0.1788)
+    n1, mean1, single1 = _para_metrics(out)
+    assert n1 < n0, "碎段应被合并(段数下降)"
+    assert mean1 > mean0, "合并后段长应上升贴作者厚段"
+    assert single1 < single0, "合并后单句独行率应下降"
+    import re as _re
+    assert _re.sub(r"\s+", "", out) == _re.sub(r"\s+", "", frag), "只并换行·一字不改(字符守恒)"
+
+
+def test_reflow_merge_noop_for_sparse_author():
+    """稀疏短段作者(单句独行>=0.5) → 不并(交给 enforce_short_paragraphs)。"""
+    frag = "第一句独立成段。\n\n第二句独立成段。\n\n第三句独立成段。"
+    out = gw.reflow_merge_dense_paragraphs(frag, author_para_mean=35, author_single=0.79)
+    assert out == frag, "稀疏作者返回原文"
+
+
+def test_reflow_merge_noop_when_already_healthy():
+    """当前单句独行率已贴作者(<=author*1.2) → 不动已健康稿(避免过并)。
+
+    健康厚段=每段 2+ 句末结束符(非单句)·单句独行率低于作者*1.2 阈值。
+    """
+    healthy = ("他推开门走进昏暗的房间。墙上挂着一幅落满灰尘的旧画像。地上散落着许多被撕碎的纸片。\n\n"
+               "他弯下腰捡起其中一片细看。纸上的字迹早已模糊难辨。窗外忽然传来一声压抑的闷响。\n\n"
+               "他猛地转身望向门口。那里空无一人只有风穿堂而过。远处又传来第二声闷响。")
+    _, _, single = _para_metrics(healthy)
+    assert single <= 0.1788 * 1.2, "测试前置：健康稿单句独行率应已达标"
+    out = gw.reflow_merge_dense_paragraphs(healthy, author_para_mean=97.15, author_single=0.1788)
+    assert out == healthy, "已达标稿不动"
+
+
+def test_reflow_merge_protects_dialogue():
+    """对话段(弯引号)在合并中保持独立成段·不与叙述或彼此合并。"""
+    frag = ("她低头理着父亲的旧物。\n\n她的指尖忽然顿住。\n\n"
+            "“阿翁，这简上刻的是哪里的水？”\n\n"
+            "“东海之东。”\n\n她把那枚旧贝紧紧攥进掌心。")
+    out = gw.reflow_merge_dense_paragraphs(frag, author_para_mean=97.15, author_single=0.1788)
+    assert "“阿翁，这简上刻的是哪里的水？”" in out.split("\n\n"), "对话段独立保留"
+    assert "“东海之东。”" in out.split("\n\n"), "对话段独立保留"
+
+
 def test_primacy_emotive_punct_for_high_density_author():
     """情绪标点密的作者(小世界级)→ primacy 块注入情绪标点强调行(防全量 prompt 被写成叙述向)。"""
     block = gw._build_hard_constraint_primacy_block({"excl": 4.9, "ques": 5.5, "ellipsis": 4.3})

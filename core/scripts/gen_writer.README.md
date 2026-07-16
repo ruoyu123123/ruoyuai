@@ -3,7 +3,7 @@
 `gen_writer.py` 是 `/cluster-write` 第 2b 步的内部脚本。v29 正文生成分两阶段，本脚本只承载**第二阶段的 gemini 分段润色**：
 
 1. **step 2a（Claude 亲笔）**：`novel-writer` agent 读 manifest / 风格 skill / brief / research 后**逐场景亲笔写作**，分场景落盘到 `<project>/章节/cluster_<key>_draft/claude_scenes/scene_*.txt`，并产 `changes_claude.json`。
-2. **step 2b（gemini 润色）· 本脚本**：`gen_writer.py` 自动发现 `claude_scenes/` 里的场景稿，逐场景段调当前 active gen-model（gemini）按作者风格档**等体量重写润色**，两道段级确定性守恒：字数守恒带 `[0.85, 1.30]`（超界带字数指令重试 1 次）+ **引号占比守恒**（润色段引号内 CJK 占比净降超界——低于原段 ×0.85 且绝对降幅 ≥2 个百分点——带引号守恒指令重试 1 次，重试仍降则**整段保留 Claude 亲笔原稿**，遥测记 `dialogue_telemetry.quote_guard`），拼接出终稿 `cluster_<key>_draft.txt`。
+2. **step 2b（gemini 润色）· 本脚本**：`gen_writer.py` 自动发现 `claude_scenes/` 里的场景稿，逐场景段调当前 active gen-model（gemini）按作者风格档**等体量重写润色**，两道段级确定性守恒：字数守恒带 `[0.85, 1.30]`（超界带字数指令重试 1 次）+ **引号占比守恒**（润色段引号内 CJK 占比净降超界——低于原段 ×0.85 且绝对降幅 ≥2 个百分点——带引号守恒指令重试 1 次，重试仍降则**整段保留 Claude 亲笔原稿**，遥测记 `dialogue_telemetry.quote_guard`），拼接出终稿 `cluster_<key>_draft.txt`。落盘前还有一道**段长对症**（确定性·作者档 `single_sentence_para_ratio < 0.5` 的密实长段作者才启用）：`enforce_short_paragraphs` 把过长非对话段按句末切短、`reflow_merge_dense_paragraphs` 把 gemini 碎化的连续叙述短段合并回作者厚段基线——修 gemini 逐段润色对段长/单句独行率的破坏；**过并态**（句子并成超长逗号长链）由 writer step 2c 作者金标准自验做拆句最后一里（见 novel-writer 合约）。
 
 本脚本**只做 gemini 分段润色**——不从零生成正文（v29 已删除从零生成路径），不切章、不写标题、不回写事实/伏笔、不做状态保存。缺 `claude_scenes/` 目录直接 `[FATAL]` 响亮失败退出（不兼容不降级：没有亲笔场景稿就不回退到从零生成）。
 

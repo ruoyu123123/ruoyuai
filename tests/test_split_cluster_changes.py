@@ -90,6 +90,38 @@ def test_overlap_ignores_unlanded():
 
 
 # ============ writeback_event_cluster_range（H11 相邻修正 + L1）============
+def test_split_changes_preserves_chapter_title():
+    """🔴 回归：split_changes 整体覆盖 per-chapter _changes.json（只写 self_eval）时，必须保留
+    gen_chapter_titles --apply 已回写的顶层 title——否则 6.2c(写title)→6.3(本脚本覆盖) 顺序下
+    title 被吞，export_book.read_title FATAL missing title（本会话真机 export 撞的坑）。
+    优先读既有 _changes.json.title，兜底从章头「第NNN章 标题」解析。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = _mk_shi(td, [{"cluster_id": "cluster_001", "chapter_range": None}])
+        # cluster-level changes + splitter WAL(chapter_range=[1,2])
+        draft = root / "章节" / "cluster_001_draft"
+        draft.mkdir(parents=True)
+        (draft / "cluster_001_changes.json").write_text(
+            json.dumps({"self_eval": {"writer_mode": "x"}}, ensure_ascii=False), encoding="utf-8")
+        (root / "_数据库" / ".wal").mkdir(parents=True, exist_ok=True)
+        (root / "_数据库" / ".wal" / "splitter_cluster_001_decisions.json").write_text(
+            json.dumps({"chapter_range": [1, 2], "cluster_start_ch": 1, "chapters_split": 2},
+                       ensure_ascii=False), encoding="utf-8")
+        # ch1: _changes.json 已有 title（apply 写入）；ch2: 只有章头（兜底解析路径）
+        c1 = root / "章节" / "第001章"; c1.mkdir(parents=True)
+        (c1 / "第001章.txt").write_text("第001章 含毒\n\n正文一。", encoding="utf-8")
+        (c1 / "第001章_changes.json").write_text(
+            json.dumps({"self_eval": {}, "title": "含毒"}, ensure_ascii=False), encoding="utf-8")
+        c2 = root / "章节" / "第002章"; c2.mkdir(parents=True)
+        (c2 / "第002章.txt").write_text("第002章 东望\n\n正文二。", encoding="utf-8")
+
+        r = scc.split_changes(root, "001")
+        assert r.get("ok") is not False, r
+        t1 = json.loads((c1 / "第001章_changes.json").read_text(encoding="utf-8"))
+        t2 = json.loads((c2 / "第002章_changes.json").read_text(encoding="utf-8"))
+        assert t1.get("title") == "含毒", "既有 _changes.json.title 须被保留"
+        assert t2.get("title") == "东望", "无既有 title 时须从章头兜底解析"
+
+
 def test_writeback_clean():
     with tempfile.TemporaryDirectory() as td:
         root = _mk_shi(td, [{"cluster_id": "cluster_001", "chapter_range": [1, 4]},

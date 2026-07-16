@@ -5,7 +5,138 @@
     "created_at": "2026-05-16",
     "schema_version": "v22"
   },
-  "universal_patterns": [],
+  "universal_patterns": [
+    {
+      "id": "exp_cluster_001_005",
+      "category": "success_patterns",
+      "trigger": "in_medias_res 倒叙里『灾难此刻』场与『时间序回溯』场交叉的入口",
+      "technique": "回溯场景入口埋一个明确的过去时锚（如『那还是前几日……一个黄昏』）把两条时间轴拆清；同时把回溯中角色的认知锁死在其当时该有的范围，绝不让过去的她预知要到现时场才第一次得知的事",
+      "why_works": "缺过去锚加强现时口吻会让读者把回溯误读成灾难现时的即时余波，再叠加跨场景知识越界就成穿帮嫌疑，倒叙整条时序可信度崩塌；本块补锚加锁认知后，三段时间多跳链经四轮阅读反思独立复查零裂缝，证明该做法能稳住倒叙结构",
+      "confidence": 1.0,
+      "scene_types": [
+        "倒叙钩",
+        "时间序回溯"
+      ],
+      "example_quote": "那还是前几日，阿父又一次险些没能撑过去之后的一个黄昏。",
+      "source_clusters": [
+        "cluster_001"
+      ],
+      "updated_at": "2026-07-15 02:17:57",
+      "version": 5,
+      "evolution_history": [
+        {
+          "version": 1,
+          "ts": "2026-07-15T02:35:57",
+          "action": "initial_record",
+          "summary": "原始记录（升级到 versioned 时刻）"
+        },
+        {
+          "version": 2,
+          "ts": "2026-07-15T15:10:08",
+          "action": "merged",
+          "merged_count": 2,
+          "summary": "合并 2 条相似 pattern"
+        },
+        {
+          "version": 3,
+          "ts": "2026-07-15T21:16:01",
+          "action": "merged",
+          "merged_count": 2,
+          "summary": "合并 2 条相似 pattern"
+        },
+        {
+          "version": 4,
+          "ts": "2026-07-16T02:11:34",
+          "action": "merged",
+          "merged_count": 3,
+          "summary": "合并 3 条相似 pattern"
+        },
+        {
+          "version": 5,
+          "ts": "2026-07-16T07:45:03",
+          "action": "merged",
+          "merged_count": 2,
+          "summary": "合并 2 条相似 pattern"
+        }
+      ],
+      "usage_count": 5,
+      "last_validated_at_ch": 18,
+      "status": "active",
+      "last_retrieved_at_ch": 15,
+      "source_project": "长恨新书",
+      "promoted_at": "2026-07-16T07:45:22",
+      "transfer_scope": "universal"
+    },
+    {
+      "id": "exp_cluster_001_001",
+      "category": "failure_patterns",
+      "trigger": "主角克制近失语 + 倒叙/回溯双叙述重头场，草稿阶段用引号心声独白去冲对话总占比时",
+      "technique": "草稿期把对话账拆成两本分别验收：外部引号对白单独对齐作者 0.2045（让可说话的配角——恳求、设问、半截话、围观评点——把外部声音说满），引号心声只记 0.1017 的内省账；绝不拿心声顶外部对白的量，润色前先自查外部对白单账，不足就回场景补真对话戏而非加心声",
+      "why_works": "本块总占比 16.5% 看似过了地板，实则草稿外部对白仅 4.77%、终稿更掉到 4.45%（作者基线 20.45%），gemini 又把引号心声成批转成无引号自由间接引语，两头一挤对话声纹全空；只有草稿期双通道分账，外部对白才有作者那种配角撑场的市声密度，这是下一 cluster 最高优先改进项",
+      "confidence": 1.0,
+      "scene_types": [
+        "主角失语",
+        "倒叙钩",
+        "回溯场"
+      ],
+      "example_quote": "只在心里头死命地喊着，我不认，我什么也不认",
+      "source_clusters": [
+        "cluster_001"
+      ],
+      "updated_at": "2026-07-15 02:17:57",
+      "version": 6,
+      "evolution_history": [
+        {
+          "version": 1,
+          "ts": "2026-07-15T02:36:15",
+          "action": "initial_record",
+          "summary": "原始记录（升级到 versioned 时刻）"
+        },
+        {
+          "version": 2,
+          "ts": "2026-07-15T02:36:33",
+          "action": "merged",
+          "merged_count": 4,
+          "summary": "合并 4 条相似 pattern"
+        },
+        {
+          "version": 3,
+          "ts": "2026-07-15T15:10:25",
+          "action": "merged",
+          "merged_count": 5,
+          "summary": "合并 5 条相似 pattern"
+        },
+        {
+          "version": 4,
+          "ts": "2026-07-15T21:16:17",
+          "action": "merged",
+          "merged_count": 5,
+          "summary": "合并 5 条相似 pattern"
+        },
+        {
+          "version": 5,
+          "ts": "2026-07-16T02:11:55",
+          "action": "merged",
+          "merged_count": 5,
+          "summary": "合并 5 条相似 pattern"
+        },
+        {
+          "version": 6,
+          "ts": "2026-07-16T07:45:22",
+          "action": "merged",
+          "merged_count": 6,
+          "summary": "合并 6 条相似 pattern"
+        }
+      ],
+      "usage_count": 5,
+      "last_validated_at_ch": 18,
+      "status": "active",
+      "last_retrieved_at_ch": 15,
+      "source_project": "长恨新书",
+      "promoted_at": "2026-07-16T07:45:22",
+      "transfer_scope": "universal"
+    }
+  ],
   "_field_doc": {
     "category": "success_patterns | failure_patterns",
     "source_project": "原项目名",

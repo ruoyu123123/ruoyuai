@@ -141,6 +141,14 @@ class DatabaseScanner:
         "webnovel_bench_mapping",
         # ECAS 故事块（cluster brief 由 build_manifest._collect_event_cluster_context 注入 manifest）
         "事件簇",
+        # 账本 / 分析产物（cluster-save-state 的 apply 步骤 / scanner / 学习层写入并消费·
+        # 非 build_manifest 注入 writer——belief/dramatic 信息经 cluster brief 已达 writer，
+        # 这些是下游聚合账本，登记为已知避免 COVERAGE 误报「新增文件」）
+        "character_belief_ledger", "cluster_actant_ledger", "戏剧问题账本",
+        "trajectory_moral_slope_history", "triage_band_report", "location_atmosphere_registry",
+        # 角色弧线（arc_state 演化账本·apply_archive/audit_hub/power_progression_scanner 消费）+
+        # 反派轮替（scaffold 惰性账本·建出即被 antagonist_rotation_scanner 消费）——均活跃读写非野文件
+        "角色弧线", "反派轮替",
     }
 
     def __init__(self, project_root: Path, chapter: int):
@@ -274,9 +282,12 @@ class DatabaseScanner:
                         _due = True
             if _due:
                 tier = p.get("tier", 3)
-                if tier == 1:
+                # canonical 伏笔 tier 是字母 A/B/C（event_cluster_schema）·部分历史数据用数字 1/2/3。
+                # 两种都归一（与 validate_chapter/foreshadowing_handoff_scanner 的 `tier in (1,"A")` 一致）·
+                # 否则字母 tier 的到期回收 + FORESHADOWING_NOT_PAID hard_gate 对全部 canonical 伏笔静默架空。
+                if tier in (1, "1", "A", "a"):
                     result["promises_tier1_due"].append(p)
-                elif tier == 2:
+                elif tier in (2, "2", "B", "b"):
                     result["promises_tier2_due"].append(p)
 
         for d in data.get("deadlines", []):

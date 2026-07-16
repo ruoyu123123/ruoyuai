@@ -24,9 +24,12 @@ EXC_RE = re.compile(r"^([A-Za-z_][\w.]*(?:Error|Exception|Warning|Interrupt|Exit
 FILE_LINE_RE = re.compile(r'File "([^"]+)", line (\d+)')
 SCRIPT_RE = re.compile(r"core[/\\]scripts[/\\](\w+\.py)")
 FATAL_RE = re.compile(r"\[(FATAL|CRASH)\]\s*(.+)")
-# 命令含这些 = 搜索/打印/版本控制类，输出里的 "Traceback" 多为字面文本，跳过避免误报
+# 命令含这些 = 搜索/打印/版本控制/临时内联脚本类，输出里的 "Traceback"/"[FATAL]" 多为读源码时的
+# 字面文本（f-string 占位符/注释），非真运行故障。跳过避免误报污染 self_heal_kb（真创作运行走
+# `py core/scripts/X.py`·不含 -c/heredoc，不受影响）。
 SEARCH_CMDS = ("grep", "rg ", "select-string", "findstr", "cat ", " type ",
-               "head ", "tail ", "git log", "git show", "git diff", "echo ", "ast.parse")
+               "head ", "tail ", "git log", "git show", "git diff", "echo ", "ast.parse",
+               "sed ", "awk ", "py -c", "python -c", "python3 -c", "-X utf8 -c", "<<'", '<<"')
 
 
 def _norm_msg(msg: str) -> str:

@@ -1,20 +1,19 @@
-"""knowledge_graph_update.py — 从 cluster_changes 增量写 knowledge_graph.json
+"""knowledge_graph_update.py — 从 事件簇.json 的 cluster locked_facts 增量写 knowledge_graph.json
 
-G3 调研发现: knowledge_graph.json 全程空→穿帮检测形同虚设。
-本脚本从已有的 cluster_changes 确定性提取 nodes/edges,零新 LLM 调用。
+v29 单一真理源：writer 链不再自报 factual，locked_facts 由 novel-archivist → apply_archive
+确定性落到 `事件簇.json → clusters[cid].locked_facts`（每条 = {fact, subject, source_cluster}）。
+本脚本读该 canonical 状态，确定性提取 角色↔事实 图，零 LLM 调用。
 
-数据源 (cluster_changes.json 已有字段):
-- facts_locked: list[str] → 每条→1 node(type=fact)
-- foreshadowing_planted: list[{id, desc}] → 每条→1 node(type=foreshadowing)
-- foreshadowing_paid: list[{id, ...}] → 对已有 node 标 resolved=True
+输出（_数据库/knowledge_graph.json）：
+- facts: list[{id, fact, subject, source_cluster}]  ← plot_structure_scanner.scan_knowledge_graph 读 len(facts)
+- nodes: list[fact 节点 + subject(角色) 节点]        ← 角色↔事实 图视图
+- edges: list[{from(subject) → to(fact), relation:"asserts"}]  ← 角色→事实 established 边
 
-输出: 追加到 _数据库/knowledge_graph.json 的 nodes[] 和 edges[]
-
-纪律:
-- 确定性(不调 LLM)
-- 幂等(同 fact 不重复入)
-- cluster 为单位(北极星①)
-- 只追加不删旧(append-only)
+纪律：
+- 确定性（不调 LLM）
+- 幂等（同 (subject, fact) 不重复入）
+- cluster 为单位（北极星①）
+- append-only（只追加不删旧）
 
 退出码: 0 成功 / 2 输入缺失、JSON 损坏或 schema 错误
 
@@ -26,13 +25,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cluster_lookup  # noqa: E402
 
-def _load_json(p: Path) -> dict:
+
+def _load_json(p: Path, default=None):
     if not p.exists():
-        return {}
+        return default
     try:
         return json.loads(p.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
@@ -47,129 +48,129 @@ def _save_json(p: Path, data: dict) -> None:
     )
 
 
+def _fact_text(entry) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("fact", "") or "").strip()
+    return str(entry).strip()
+
+
+def _subject(entry) -> str:
+    if isinstance(entry, dict):
+        return str(entry.get("subject", "") or "").strip()
+    return ""
+
+
 def _node_key(node: dict) -> str:
     """用 type+label 做去重 key。"""
     return f"{node.get('type', '')}::{node.get('label', '')}"
 
 
-def update_from_changes(
+def _cluster_locked_facts(project_root: Path, canonical_cid: str):
+    """从 事件簇.json 取指定 cluster 的 locked_facts（canonical 源）。
+
+    Returns list | None（None = 事件簇.json 无此 cluster）。
+    """
+    ec = _load_json(project_root / "_数据库" / "事件簇.json", {}) or {}
+    for c in ec.get("clusters", []):
+        cid = cluster_lookup.normalize_cluster_id(c.get("cluster_id"))
+        if cid == canonical_cid:
+            lf = c.get("locked_facts", [])
+            if not isinstance(lf, list):
+                raise RuntimeError(f"{canonical_cid}.locked_facts 必须是数组")
+            return lf
+    return None
+
+
+def update_from_locked_facts(
     project_root: Path,
     cluster_id: str,
 ) -> dict:
-    """从 cluster_changes 增量写 knowledge_graph.json。
+    """从 事件簇.json 的 cluster locked_facts 增量写 knowledge_graph.json。
 
     Returns:
-        {"added_nodes": N, "added_edges": N, "skipped_dups": N}
+        {"added_facts": N, "added_nodes": N, "added_edges": N, "skipped_dups": N}
     """
+    canonical_cid = cluster_lookup.normalize_cluster_id(cluster_id)
+    if not canonical_cid:
+        raise ValueError(f"无法归一 cluster_id: {cluster_id}")
+
     db = project_root / "_数据库"
     kg_path = db / "knowledge_graph.json"
-    kg = _load_json(kg_path)
+    kg = _load_json(kg_path, {}) or {}
+    kg.setdefault("schema_version", "v29")
+    for key in ("facts", "nodes", "edges"):
+        kg.setdefault(key, [])
+        if not isinstance(kg[key], list):
+            raise RuntimeError(f"knowledge_graph.json 的 {key} 必须是列表")
 
-    if "nodes" not in kg:
-        kg["nodes"] = []
-    if "edges" not in kg:
-        kg["edges"] = []
-    if not isinstance(kg["nodes"], list) or not isinstance(kg["edges"], list):
-        raise RuntimeError("knowledge_graph.json 的 nodes/edges 必须是列表")
-    if "schema_version" not in kg:
-        kg["schema_version"] = "v1"
+    locked = _cluster_locked_facts(project_root, canonical_cid)
+    if locked is None:
+        raise FileNotFoundError(f"事件簇.json 找不到 cluster: {cluster_id}")
 
-    # 已有 node key 集合(去重)
-    existing_keys = {_node_key(n) for n in kg["nodes"]}
+    existing_facts = {(_subject(f), _fact_text(f)) for f in kg["facts"]}
+    existing_nodes = {_node_key(n) for n in kg["nodes"]}
+    existing_edges = {
+        (e.get("from"), e.get("to"), e.get("relation")) for e in kg["edges"]
+    }
 
-    # 找 cluster_changes
-    changes_candidates = [
-        project_root / "章节" / f"{cluster_id}_draft" / f"{cluster_id}_changes.json",
-        project_root / "章节" / f"cluster_{cluster_id}_draft" / f"cluster_{cluster_id}_changes.json",
-    ]
-    changes_path = next((p for p in changes_candidates if p.exists()), None)
-    if changes_path is None:
-        raise FileNotFoundError(f"找不到 cluster changes: {cluster_id}")
+    added_facts = added_nodes = added_edges = skipped = 0
 
-    changes = _load_json(changes_path)
-    if not isinstance(changes, dict):
-        raise RuntimeError(f"{changes_path} 顶层必须是对象")
-    added_nodes = 0
-    added_edges = 0
-    skipped = 0
-    ts = datetime.now().isoformat(timespec="seconds")
+    for entry in locked:
+        fact = _fact_text(entry)
+        if not fact:
+            continue
+        subject = _subject(entry)
+        fkey = (subject, fact)
+        if fkey in existing_facts:
+            skipped += 1
+            continue
+        existing_facts.add(fkey)
 
-    # 1. facts_locked → nodes(type=fact)
-    for fact in changes.get("facts_locked", []):
-        label = fact if isinstance(fact, str) else str(fact)
-        node = {
+        fact_id = f"KF_{len(kg['facts']) + 1:04d}"
+        kg["facts"].append({
+            "id": fact_id,
+            "fact": fact,
+            "subject": subject,
+            "source_cluster": canonical_cid,
+        })
+        added_facts += 1
+
+        # fact 节点
+        fnode = {
             "type": "fact",
-            "label": label,
-            "source_cluster": cluster_id,
-            "locked_at": ts,
+            "label": fact,
+            "id": fact_id,
+            "subject": subject,
+            "source_cluster": canonical_cid,
         }
-        key = _node_key(node)
-        if key in existing_keys:
-            skipped += 1
-            continue
-        kg["nodes"].append(node)
-        existing_keys.add(key)
-        added_nodes += 1
+        fk = _node_key(fnode)
+        if fk not in existing_nodes:
+            kg["nodes"].append(fnode)
+            existing_nodes.add(fk)
+            added_nodes += 1
 
-    # 2. foreshadowing_planted → nodes(type=foreshadowing)
-    for fs in changes.get("foreshadowing_planted", []):
-        if isinstance(fs, dict):
-            label = fs.get("id") or fs.get("desc", "")[:50]
-            desc = fs.get("desc", "")
-        else:
-            label = str(fs)[:50]
-            desc = str(fs)
-        node = {
-            "type": "foreshadowing",
-            "label": label,
-            "description": desc,
-            "source_cluster": cluster_id,
-            "planted_at": ts,
-            "resolved": False,
-        }
-        key = _node_key(node)
-        if key in existing_keys:
-            skipped += 1
-            continue
-        kg["nodes"].append(node)
-        existing_keys.add(key)
-        added_nodes += 1
-
-    # 3. foreshadowing_paid → 标记已有伏笔 node resolved=True
-    for paid in changes.get("foreshadowing_paid", []):
-        paid_id = paid.get("id") if isinstance(paid, dict) else str(paid)
-        for n in kg["nodes"]:
-            if n.get("type") == "foreshadowing" and n.get("label") == paid_id:
-                if not n.get("resolved"):
-                    n["resolved"] = True
-                    n["resolved_at"] = ts
-                    n["resolved_cluster"] = cluster_id
-
-    # 4. facts 之间加 edges(同 cluster 的 facts 互相关联)
-    cluster_facts = [
-        n for n in kg["nodes"]
-        if n.get("type") == "fact" and n.get("source_cluster") == cluster_id
-    ]
-    if len(cluster_facts) >= 2:
-        # 同 cluster 内的 facts 两两关联(简单策略)
-        existing_edges = {
-            (e.get("from"), e.get("to")) for e in kg["edges"]
-        }
-        for i, f1 in enumerate(cluster_facts):
-            for f2 in cluster_facts[i + 1:]:
-                pair = (f1["label"], f2["label"])
-                if pair not in existing_edges:
-                    kg["edges"].append({
-                        "from": f1["label"],
-                        "to": f2["label"],
-                        "relation": "co_established",
-                        "source_cluster": cluster_id,
-                    })
-                    existing_edges.add(pair)
-                    added_edges += 1
+        # subject(角色) 节点 + 角色→事实 asserts 边（角色↔事实图核心）
+        if subject:
+            snode = {"type": "character", "label": subject}
+            sk = _node_key(snode)
+            if sk not in existing_nodes:
+                kg["nodes"].append(snode)
+                existing_nodes.add(sk)
+                added_nodes += 1
+            edge = (subject, fact, "asserts")
+            if edge not in existing_edges:
+                kg["edges"].append({
+                    "from": subject,
+                    "to": fact,
+                    "relation": "asserts",
+                    "source_cluster": canonical_cid,
+                })
+                existing_edges.add(edge)
+                added_edges += 1
 
     _save_json(kg_path, kg)
     return {
+        "added_facts": added_facts,
         "added_nodes": added_nodes,
         "added_edges": added_edges,
         "skipped_dups": skipped,
@@ -178,14 +179,15 @@ def update_from_changes(
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="从 cluster_changes 增量写 knowledge_graph.json (确定性·零 LLM)"
+        description="从 事件簇.json 的 cluster locked_facts 增量写 knowledge_graph.json (确定性·零 LLM)"
     )
     ap.add_argument("project_root", help="workspace/novels/<书名>/")
-    ap.add_argument("--cluster", required=True, help="cluster_id (如 cluster_001)")
+    ap.add_argument("--cluster", required=True, help="cluster_id (如 cluster_001 / 001)")
     args = ap.parse_args()
 
-    result = update_from_changes(Path(args.project_root), args.cluster)
-    print(f"[knowledge_graph] +{result['added_nodes']} nodes, "
+    result = update_from_locked_facts(Path(args.project_root), args.cluster)
+    print(f"[knowledge_graph] +{result['added_facts']} facts, "
+          f"+{result['added_nodes']} nodes, "
           f"+{result['added_edges']} edges, "
           f"{result['skipped_dups']} dups skipped")
     return 0

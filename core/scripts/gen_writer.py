@@ -2229,6 +2229,98 @@ def enforce_short_paragraphs(body: str, author_para_mean: float = None, author_s
     return new_body
 
 
+def reflow_merge_dense_paragraphs(body: str, author_para_mean: float = None,
+                                  author_single: float = None) -> str:
+    """碎段合并：把 gemini 分段润色碎化的连续叙述短段合并回作者厚段基线。
+
+    enforce_short_paragraphs 的镜像——作者写密实多句长段(author_single<0.5)时，gemini 逐段
+    润色常把厚段打散成单句独行段(段长骤降/单句独行率飙升·偏离作者金标准段落闸)。本步按作者
+    段长基线把连续的非对话/非面板短段贪心合并回厚段(贴 mean)，孤儿单句叙述段吸收进相邻厚段，
+    保留对话/心声引号段独立成段 + 适量独句段(作者签名情绪停顿)。
+
+    仅对密实长段作者(author_single<0.5)启用；稀疏作者(>=0.5)或已达标(当前单句独行率已贴作者)
+    返回原文。北极星④：段落是格式层·只并换行不改一字·对话/心声/系统面板不并。
+    对话回合的同说话人碎段合并需语义判断(留 writer 最后一里·本步只做叙述厚段还原)。
+    """
+    import re as _re
+    if author_single is None or author_single >= 0.5:
+        return body
+    base = author_para_mean if (author_para_mean and author_para_mean > 0) else 90.0
+    target_low = max(base * 1.1, 50.0)
+    cap = base * 1.85
+    LQ = "“"
+
+    def _cjk(s):
+        return len(_re.findall(r"[一-鿿]", s))
+
+    def protected(s):
+        s = s.lstrip()
+        return s.startswith(LQ) or s.startswith("”") or s.startswith("【") or s.startswith("「")
+
+    def _is_single(p):
+        return len(_re.findall(r"[。！？…]", p)) <= 1
+
+    paras = [blk.replace("\n", "").strip() for blk in body.split("\n\n")]
+    paras = [p for p in paras if p]
+    if not paras:
+        return body
+    # 已达标(单句独行率贴作者)→不动，避免过并已健康稿
+    cur_single = sum(1 for p in paras if _is_single(p)) / len(paras)
+    if cur_single <= author_single * 1.2:
+        return body
+
+    out, buf = [], []
+
+    def _buflen():
+        return _cjk("".join(buf))
+
+    def _flush():
+        nonlocal buf
+        if not buf:
+            return
+        seg = "".join(buf)
+        buf = []
+        # 孤儿吸收：短单句叙述段并入上一叙述厚段(不并对话/心声)
+        if _is_single(seg) and out and not protected(out[-1]) and _cjk(out[-1]) + _cjk(seg) <= cap * 1.4:
+            out[-1] = out[-1] + seg
+        else:
+            out.append(seg)
+
+    for p in paras:
+        if protected(p):
+            _flush()
+            out.append(p)
+            continue
+        if buf and _buflen() + _cjk(p) > cap:
+            _flush()
+        buf.append(p)
+        if _buflen() >= target_low:
+            _flush()
+    _flush()
+    # 二次吸收：夹在叙述间的孤立叙述单句段并入邻居(优先并前)
+    changed = True
+    while changed:
+        changed = False
+        for i, p in enumerate(out):
+            if protected(p) or not _is_single(p):
+                continue
+            if i > 0 and not protected(out[i - 1]) and _cjk(out[i - 1]) + _cjk(p) <= cap * 1.4:
+                out[i - 1] = out[i - 1] + p
+                out.pop(i)
+                changed = True
+                break
+            if i < len(out) - 1 and not protected(out[i + 1]) and _cjk(out[i + 1]) + _cjk(p) <= cap * 1.4:
+                out[i + 1] = p + out[i + 1]
+                out.pop(i)
+                changed = True
+                break
+    merged = len(paras) - len(out)
+    if merged > 0:
+        logger.info(f" 碎段合并：{len(paras)}→{len(out)} 段（并回 {merged} 段作者厚段·基线 {base:.0f}·"
+                    f"单句独行 {cur_single:.2f}→{sum(1 for p in out if _is_single(p)) / len(out):.2f}）")
+    return "\n\n".join(out)
+
+
 def save_output(project_root: Path, cluster_id: int, body: str, changes: dict,
                 ch_start: int, used_profile: Profile,
                 polish_trace: dict = None):
@@ -2427,6 +2519,8 @@ def main():
     _auth_sent, _auth_para, _auth_single = _read_author_rhythm(project_root)
     logger.info(f" 作者节奏基线：句长={_auth_sent} 段长={_auth_para} 单句独行={_auth_single}")
     body = enforce_short_paragraphs(body, author_para_mean=_auth_para, author_single=_auth_single)
+    # 碎段合并（enforce_short 镜像·密实长段作者反向修 gemini 碎化·还原作者厚段基线过金标准闸）
+    body = reflow_merge_dense_paragraphs(body, author_para_mean=_auth_para, author_single=_auth_single)
 
     # changes = Claude self_eval/waivers（step 2a 产）+ 本脚本确定性遥测（save_output 内合并）
     draft_path, cjk = save_output(project_root, args.cluster, body, claude_changes,

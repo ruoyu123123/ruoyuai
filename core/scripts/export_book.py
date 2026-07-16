@@ -120,17 +120,27 @@ def validate_chapter_body(path: Path, text: str) -> None:
         if marker in text:
             raise ValueError(f"machine metadata marker found in chapter body: {path}")
 
-    lines = text.splitlines()
-    first_nonempty = next((line.strip() for line in lines if line.strip()), "")
-    if first_nonempty and TITLE_LINE_RE.fullmatch(first_nonempty):
-        raise ValueError(f"chapter body includes a title line; splitter must remove it before export: {path}")
+
+def _strip_leading_title_line(text: str) -> str:
+    """\u5265\u53bb\u6b63\u6587\u9996\u884c\u7684\u300c\u7b2cN\u7ae0 \u6807\u9898\u300d\u5934\u3002
+
+    gen_chapter_titles.apply_titles \u786e\u5b9a\u6027\u628a\u6807\u9898\u5934\u5199\u8fdb\u7ae0\u6b63\u6587\uff08\u5176\u5408\u7ea6\u4e0e\u6d4b\u8bd5\u8981\u6c42\u00b7\u4fbf\u4e8e\u9010\u7ae0\u9605\u8bfb\uff09\uff0c
+    \u800c export \u4ece _changes.json \u7684 title \u81ea\u884c\u62fc header\u2014\u2014\u4e24\u5904\u540c\u6e90\u540c\u9898\uff0c\u6545\u5bfc\u51fa\u524d\u5265\u6389\u6b63\u6587\u91cc\u7684\u90a3\u4e00\u884c\uff0c
+    \u907f\u514d\u4e0e export \u62fc\u7684 header \u91cd\u590d\uff08\u7ae0\u6570/\u5b57\u6570\u5b88\u6052\u6309\u7eaf\u6b63\u6587\u8ba1\uff09\u3002
+    """
+    stripped = text.strip()
+    lines = stripped.splitlines()
+    idx = next((i for i, ln in enumerate(lines) if ln.strip()), None)
+    if idx is not None and TITLE_LINE_RE.fullmatch(lines[idx].strip()):
+        return "\n".join(lines[idx + 1:]).strip()
+    return stripped
 
 
 def build_chapter_parts(chapter_no: int, raw_text: str, title: str, source: Path | None = None) -> tuple[str, str]:
     if source is not None:
         validate_chapter_body(source, raw_text)
     header = f"\u7b2c{chapter_no}\u7ae0 {title}"
-    body = raw_text.strip()
+    body = _strip_leading_title_line(raw_text)
     if not body:
         raise ValueError(f"empty chapter body: chapter {chapter_no}")
     return header, body

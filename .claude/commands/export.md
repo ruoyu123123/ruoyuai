@@ -37,7 +37,6 @@ $ARGUMENTS
 3. `export_book.py` 在写出任何 `exports/*` 成品前完成硬校验。以下情况必须 exit 2，且不得留下导出成品：
    - 缺章、重复章、章目录存在但正文文件缺失；
    - 章节正文读取失败、正文为空、正文混入 `---CHANGES---` 等机器段；
-   - 正文首行仍带章标题，说明上游 splitter 未清理；
    - `_changes.json` 缺失或没有非空 `title`；
    - 存在未消费 `pending_tail`。
 
@@ -59,7 +58,7 @@ $ARGUMENTS
 （正文）
 ```
 
-标题来自每章 `_changes.json` 的顶层 `title` 字段；正文必须已经是纯正文。导出脚本只做确定性拼接和全书结构校验。
+标题来自每章 `_changes.json` 的顶层 `title` 字段（`gen_chapter_titles --apply` 落盘、`split_cluster_changes` 覆盖时保留）。`gen_chapter_titles --apply` 会把「第NNN章 标题」章头写进正文首行便于逐章阅读；导出时 `export_book` 确定性剥离该首行章头、再按 `_changes.json.title` 自拼 header（字数守恒按纯正文计）。导出脚本只做确定性拼接和全书结构校验。
 
 ## 完成汇报
 

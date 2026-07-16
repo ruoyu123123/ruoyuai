@@ -76,24 +76,22 @@ def test_missing_title_metadata_is_hard_and_no_output_written() -> None:
         assert any(issue["code"] == "CHAPTER_READ_OR_CONTRACT_ERROR" for issue in report["integrity"]["issues"])
 
 
-def test_body_title_line_is_hard_contract_error() -> None:
+def test_body_title_line_is_stripped_and_title_from_changes() -> None:
+    # gen_chapter_titles.apply_titles \u786e\u5b9a\u6027\u628a\u300c\u7b2cN\u7ae0 \u6807\u9898\u300d\u5934\u5199\u8fdb\u7ae0\u6b63\u6587\uff08\u5176\u5408\u7ea6+\u6d4b\u8bd5\u8981\u6c42\uff09\uff0c
+    # export \u4ece _changes.json \u7684 title \u62fc header\u2192\u5bfc\u51fa\u524d\u5265\u6389\u6b63\u6587\u91cc\u7684\u90a3\u884c\uff0c\u4e0d\u91cd\u590d\u3001\u4e0d\u786c\u6bd9\u3002
     with tempfile.TemporaryDirectory() as temp:
         root = Path(temp) / "\u4e66"
         root.mkdir()
+        # \u6b63\u6587\u9996\u884c\u662f\u300c\u7b2c001\u7ae0 \u96ea\u591c\u6765\u5ba2\u300d\u3001_changes.json title \u662f\u300c\u96ea\u591c\u300d\u2014\u2014export \u7528\u540e\u8005\u62fc\u5934
         _mk_chapter(root, 1, "\u7b2c001\u7ae0 \u96ea\u591c\u6765\u5ba2\n\n\u95e8\u88ab\u63a8\u5f00\u3002", title="\u96ea\u591c")
 
-        try:
-            eb.export_book(root)
-            raise AssertionError("title line in chapter body should block export")
-        except eb.ExportIntegrityError as exc:
-            errors = [
-                detail
-                for issue in exc.report["integrity"]["issues"]
-                if issue["code"] == "CHAPTER_READ_OR_CONTRACT_ERROR"
-                for detail in issue["detail"]
-            ]
-        assert any("title line" in item["error"] for item in errors)
-        assert not (root / "exports").exists()
+        eb.export_book(root)
+        exports = list((root / "exports").glob("*.txt"))
+        assert len(exports) == 1, "export \u5e94\u6210\u529f\u843d\u76d8"
+        text = exports[0].read_text(encoding="utf-8")
+        assert "\u7b2c1\u7ae0 \u96ea\u591c" in text, "header \u5e94\u6765\u81ea _changes.json title"
+        assert "\u96ea\u591c\u6765\u5ba2" not in text, "\u6b63\u6587\u91cc\u7684\u65e7\u6807\u9898\u5934\u5e94\u88ab\u5265\u6389\u4e0d\u91cd\u590d"
+        assert "\u95e8\u88ab\u63a8\u5f00" in text, "\u7eaf\u6b63\u6587\u4fdd\u7559"
 
 
 def test_changes_markers_in_body_are_hard_contract_error() -> None:

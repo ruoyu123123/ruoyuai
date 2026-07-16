@@ -190,7 +190,37 @@ gen_writer.py 自动发现 `claude_scenes/`，逐场景段调 gemini 按风格�
 **万字整体润色是已证伪形态**（TransportEmpty 三连败）——分段由脚本内部处理，本 agent
 不需要也不允许自行调 LLM 润色。
 
-### 5. 校验输出并返回
+gen_writer.py 落终稿前**自动跑 `reflow_merge_dense_paragraphs`**：密实长段作者（作者档
+`single_sentence_para_ratio < 0.5`）时，把 gemini 分段润色碎化的连续叙述单句段合并回作者厚段
+基线（北极星④格式层·只并换行不改字·对话/心声/系统面板独立成段保留），把碎化稿单句独行率
+从 ~0.6 拉回 ~0.19；同说话人对话碎段合并需语义判断，脚本不做，留 step 2c 最后一里。
+
+### 5. 润色后作者金标准自验（step 2c · required）
+
+gemini 逐段润色仍可能把厚段打散或把同说话人一段多句对话拆成多段单句，令段长/单句独行率
+偏离作者基线。**本 agent 返回前必须自跑作者金标准段落闸并确保通过**：
+
+```bash
+python core/scripts/replication_fidelity_check.py \
+  --project "<PROJECT>" --cluster <cluster_number> --strict
+```
+
+- `verdict: pass`（偏离维度 0）→ 进下一节校验返回。
+- `verdict: fail` → **就地做最后一里 reflow**（北极星④格式层·只调段界/句界标点·一字不改）。gemini
+  有**两种相反的越带失败态，按实测维对症**：
+  - **碎化态**（段长偏低/单句独行率偏高）→ **合并**：① 合并 gemini 拆开的**同说话人**连续对话/心声续段
+    回单段多句（不同说话人绝不并·对话独立成段保留）；② 吸收孤立叙述单句段进相邻厚段（gen_writer 内置
+    reflow_merge 已自动兜大部分·此为补漏）。
+  - **过并态**（句长偏高/单句独行率偏高·单句段其实是一个 100+ 字超长逗号长链）→ **拆句**：自然分句处
+    部分「，」→「。」把长链拆成多句号句·句长贴作者基线·补出句号让长单句段变多句段·**保留作者逗号长链
+    密实签名**（适度长句不砍碎）。
+  - 通用：③ 破折号清零（dash≈0）；④ 保留适量独句段（目标进带非归零）。改完**重跑本闸直到 `pass`**。
+- 每次 reflow 在 `changes.json` 的 `self_eval.post_polish_deterministic_fixes` 追加
+  `{"fix": "reflow_merge", before/after 的 para_mean 与 single_ratio}` 留痕，并同步 `ecas_metadata.cjk_actual`。
+- **禁止**用理由豁免绕过本闸（段长/单句独行是作者金标准硬维·北极星⑤ fidelity 类）；无法进带
+  只能继续 reflow 或回头把叙述场景写厚，不得写 waiver 后返回。
+
+### 6. 校验输出并返回
 
 必须同时存在：终稿 draft.txt + changes.json + claude_scenes/ + draft_claude.txt。
 

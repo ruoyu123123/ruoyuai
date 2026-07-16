@@ -523,6 +523,17 @@ def apply_titles(project: Path, cluster: str) -> int:
             return 3
         body_stripped = strip_existing_title(body)
         p.write_text(f"第{ch:03d}章 {title}\n\n{body_stripped}", encoding='utf-8')
+        # 章标题回写 per-chapter _changes.json —— export_book.read_title 的单一来源
+        # （章头/进度.json 已写·此前漏写 _changes.json 致 export FATAL missing title）
+        _cp = project / '章节' / f'第{ch:03d}章' / f'第{ch:03d}章_changes.json'
+        try:
+            _cdata = json.loads(_cp.read_text(encoding='utf-8')) if _cp.exists() else {}
+        except (OSError, ValueError):
+            _cdata = {}
+        if not isinstance(_cdata, dict):
+            _cdata = {}
+        _cdata['title'] = title
+        _cp.write_text(json.dumps(_cdata, ensure_ascii=False, indent=2), encoding='utf-8')
         taken.append(title)
         rec = {"title": title, "tier": entry.get("tier", "normal")}
         accepted_this_round[ch] = rec

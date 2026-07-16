@@ -152,6 +152,20 @@ def test_due_foreshadowing_tristate():
         assert "fs_done" not in blob and "fs_susp" not in blob
 
 
+def test_due_foreshadowing_letter_tier_normalized():
+    """🔴 回归：canonical 伏笔 tier 是字母 A/B/C（event_cluster_schema），到期判定必须归一——
+    否则 build_manifest 只认数字 tier==1/2 时，字母 tier 的到期回收 + FORESHADOWING_NOT_PAID
+    hard_gate 对全部 canonical 伏笔静默架空（本仓伏笔表实测 0 个数字 tier·全是 A/B）。"""
+    with tempfile.TemporaryDirectory() as td:
+        proj = _mk_due_project(td, [
+            {"id": "fs_A", "status": "open", "tier": "A", "due_by": 3},
+            {"id": "fs_B", "status": "open", "tier": "B", "due_by": 3},
+        ])
+        due = bm.DatabaseScanner(proj, 5).due_foreshadowing()
+        assert [p["id"] for p in due["promises_tier1_due"]] == ["fs_A"], "字母 A tier 到期须进 tier1_due"
+        assert [p["id"] for p in due["promises_tier2_due"]] == ["fs_B"], "字母 B tier 到期须进 tier2_due"
+
+
 def test_due_foreshadowing_open_not_yet_due():
     """open 但未到期 → 不进 due 列表（到期判定不受生命周期改动影响）。"""
     with tempfile.TemporaryDirectory() as td:

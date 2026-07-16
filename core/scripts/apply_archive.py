@@ -277,26 +277,42 @@ def apply_relationships(db: Path, rels: list, summary: dict, dry: bool):
     p = db / "关系.json"
     d = load_json(p, {"schema_version": 1, "relationships": [], "faction_standings": []})
     d.setdefault("relationships", [])
-    by_id = {r.get("id") for r in d["relationships"] if isinstance(r, dict)}
-    by_pair = {(r.get("from"), r.get("to")) for r in d["relationships"] if isinstance(r, dict)}
+    existing = [r for r in d["relationships"] if isinstance(r, dict)]
+    by_id = {r.get("id"): r for r in existing if r.get("id")}
+    by_pair = {(r.get("from"), r.get("to")): r for r in existing}
     added = 0
+    updated = 0
     for r in rels:
         if not isinstance(r, dict):
             raise ValueError("relationships 条目必须是 object")
         rid = r.get("id")
-        pair = (r.get("from"), r.get("to"))
-        if not rid or not r.get("from") or not r.get("to"):
+        frm, to = r.get("from"), r.get("to")
+        if not rid or not frm or not to:
             raise ValueError("relationship 必须包含 id/from/to")
-        if rid in by_id or pair in by_pair:
+        pair = (frm, to)
+        prev = by_id.get(rid) or by_pair.get(pair)
+        if prev is not None:
+            # 同一对角色（稳定 REL_* id 或同 from/to）关系演进：就地更新 type/note，
+            # 不丢演进（敌意→联盟等）。同 id 同内容重发 = 幂等 no-op。
+            changed = False
+            nt, nn = r.get("type", ""), r.get("note", "")
+            if nt and nt != prev.get("type", ""):
+                prev["type"] = nt
+                changed = True
+            if nn and nn != prev.get("note", ""):
+                prev["note"] = nn
+                changed = True
+            if changed:
+                updated += 1
             continue
-        d["relationships"].append({"id": rid,
-                                   "from": r.get("from"), "to": r.get("to"),
-                                   "type": r.get("type", ""), "note": r.get("note", "")})
-        by_id.add(rid)
-        by_pair.add(pair)
+        rel = {"id": rid, "from": frm, "to": to,
+               "type": r.get("type", ""), "note": r.get("note", "")}
+        d["relationships"].append(rel)
+        by_id[rid] = rel
+        by_pair[pair] = rel
         added += 1
-    summary["relationships"] = {"added": added}
-    if not dry and added:
+    summary["relationships"] = {"added": added, "updated": updated}
+    if not dry and (added or updated):
         save_json(p, d)
 
 

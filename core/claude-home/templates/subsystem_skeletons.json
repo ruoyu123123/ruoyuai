@@ -288,8 +288,6 @@
       },
       "book_title": "<书名>",
       "current_cluster": "cluster_001",
-      "completed": 0,
-      "current": 1,
       "writer_mode": "freestyle",
       "rhythm_profile": "混合",
       "volumes": [],
@@ -913,16 +911,16 @@
       "_imprint_schema": {}
     },
     "knowledge_graph": {
-      "schema_version": "v27",
-      "_doc": "知识图谱 · 角色↔事实↔密级 · nodes/edges",
+      "schema_version": "v29",
+      "_doc": "知识图谱 · 角色↔事实图 · knowledge_graph_update.py 从 事件簇.json 的 cluster locked_facts 确定性增量写 facts[]/nodes[]/edges[]（v29 单一真理源，writer 链不自报 factual）· plot_structure_scanner.scan_knowledge_graph 读 facts 算 registered_facts/信息差不对称",
       "consumption": {
         "layer": "via_scanner",
         "by": [
-          "locked_fact_cross_scene_scanner",
-          "knowledge_gap_scanner"
+          "plot_structure_scanner.scan_knowledge_graph"
         ],
         "status": "live"
       },
+      "facts": [],
       "nodes": [],
       "edges": []
     },

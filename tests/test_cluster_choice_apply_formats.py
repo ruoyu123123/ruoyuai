@@ -98,6 +98,43 @@ def test_blueprint_written_for_build_manifest_preflight():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_blueprint_vol_reads_volume_key():
+    """🔴 回归：brief 的卷号 canonical 键是 "volume"（emergence/outline-planner 产），
+    blueprint 必须读到它——旧代码读 brief.get("vol") 永远拿不到 → vol2+ cluster 全被
+    误标 vol=1（进度.json 与 事件簇.json volume 双口径）。"""
+    tmp = _proj()
+    ch = tmp / "choice.json"
+    ch.write_text(json.dumps({"answer": {
+        "cluster_id": "cluster_004", "volume": 2, "scope_summary": "vol2 开卷",
+        "scene_storyboard": [{"scene": 0, "summary": "起意东行"}]}},
+        ensure_ascii=False), encoding="utf-8")
+    try:
+        cca.apply_choice(tmp, "004", ch)
+        prog = json.loads((tmp / "_数据库" / "进度.json").read_text(encoding="utf-8"))
+        assert prog["cluster_blueprint"]["cluster_004"]["vol"] == 2, "brief volume:2 未传到 blueprint vol"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_apply_choice_advances_current_cluster():
+    """🔴 A9 回归：schema-required 的 进度.json.current_cluster 必须随应用下一 cluster
+    brief 前移——此前无人回写，全程卡 skeleton 初值 cluster_001（db_schema_validate 要求非空）。"""
+    tmp = _proj()
+    ch = tmp / "choice.json"
+    ch.write_text(json.dumps({"answer": {
+        "cluster_id": "cluster_004", "volume": 2, "scope_summary": "vol2 开卷",
+        "scene_storyboard": [{"scene": 0, "summary": "起意东行"}]}},
+        ensure_ascii=False), encoding="utf-8")
+    try:
+        cca.apply_choice(tmp, "004", ch)
+        prog = json.loads((tmp / "_数据库" / "进度.json").read_text(encoding="utf-8"))
+        assert prog["current_cluster"] == "cluster_004"
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_blueprint_start_ch_after_prev_range():
     """后续 cluster：start = 前一 cluster 已回填 chapter_range 末 + 1。"""
     tmp = _proj()

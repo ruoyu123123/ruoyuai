@@ -319,6 +319,29 @@ def split_changes(project_root: Path, cluster_key: str) -> dict:
         ch_data = {
             "self_eval": cluster_changes.get("self_eval", {}),
         }
+        # 🔴 保留 gen_chapter_titles --apply 已回写的章标题（export_book.read_title 的单一来源）。
+        # step 6.2c(apply 写 title) 跑在 step 6.3(本脚本) 之前，本脚本整体覆盖 _changes.json 会
+        # 吞掉 title → export FATAL missing title。故覆盖前先救出 title：优先读既有 _changes.json，
+        # 兜底从章头「第NNN章 标题」解析（apply 已把章头写进正文首行）。
+        _title = None
+        if ch_changes_path.exists():
+            try:
+                _prev = json.loads(ch_changes_path.read_text(encoding="utf-8"))
+                if isinstance(_prev, dict) and isinstance(_prev.get("title"), str) and _prev["title"].strip():
+                    _title = _prev["title"].strip()
+            except (OSError, ValueError):
+                _title = None
+        if not _title:
+            try:
+                _first = (ch_dir / f"第{n:03d}章.txt").read_text(encoding="utf-8").lstrip().splitlines()[0]
+                if _first.startswith("第") and "章" in _first:
+                    _cand = _first.split("章", 1)[1].strip()
+                    if _cand:
+                        _title = _cand
+            except (OSError, IndexError):
+                _title = None
+        if _title:
+            ch_data["title"] = _title
         ch_changes_path.write_text(json.dumps(ch_data, ensure_ascii=False, indent=2), encoding="utf-8")
         written.append(str(ch_changes_path))
 
