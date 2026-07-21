@@ -206,7 +206,7 @@ def _load_research_cache_for_cluster(db: Path, cluster_id: int, manifest_dict: d
 # memory 里 type=feedback 文件（每文件截 2500 字）一股脑塞进 writer system 时，相当一部分是
 # 流程/基建/蒸馏/测试/合规类 lesson（default_no_step_skipping / real_api_tests / verify_stderr /
 # runtime_self_learning …），对「生成正文」零价值，却会把 system prompt 撑到远超
-# elysiver max_prompt_chars 上限 → 直接跳过不调用（system prompt 过大是真实卡死根因）。
+# profile max_prompt_chars 上限 → 直接跳过不调用（system prompt 过大是真实卡死根因）。
 # 北极星⑤：砍的全是与创作无关的流程 lesson；作者档第一权威 + 写作工艺禁令完整保留。
 # 扩展口径：白名单 ∪ 任何带 frontmatter `writer_relevant: true` 的 feedback（新增写作工艺 lesson
 # 只要标这一行就会被注入，无需改本表）。
@@ -1978,8 +1978,9 @@ def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
     """逐场景段润色主流程。
 
     每段独立调 gemini（creative=True · 写正文禁 flash 兜底红线沿用）；两道段级确定性守恒：
-    · 字数守恒 [POLISH_CJK_LOW, POLISH_CJK_HIGH]——超界带明确字数指令重试 1 次，
-      再超界取离守恒中心更近者并留痕；
+    · 字数守恒 [POLISH_CJK_LOW, POLISH_CJK_HIGH]——超界带明确字数指令重试 1 次，重试仍超界
+      **整段保留 Claude 亲笔原稿**（与引号维度对称·2026-07-18 根治：旧版重试仍超界会取
+      「离守恒中心更近者」即便仍超出红线也收下——实测撞过 scene 级 71% 膨胀被无条件接受）；
     · 引号占比守恒 quote_ratio_violated——净降超界带引号守恒指令重试 1 次，重试仍降
       **整段保留 Claude 亲笔原稿**（亲笔优先·润色无权改叙述模式）。
     全程留痕（北极星⑤透明可审）。返回 (拼接正文, used_profile, polish_trace)。
@@ -1989,6 +1990,7 @@ def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
     seed_trace = None
     total = len(scene_files)
     quote_triggered = quote_retried_n = quote_kept_n = 0
+    cjk_triggered = cjk_retried_n = cjk_kept_n = 0
     for i, (name, src) in enumerate(scene_files):
         src_cjk = cio.count_cjk(src)
         src_quote = calc_dialogue_ratio(src)
@@ -2003,8 +2005,11 @@ def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
         out_cjk = cio.count_cjk(body)
         ratio = out_cjk / max(src_cjk, 1)
         retried = False
+        cjk_kept_claude = False
         if not (POLISH_CJK_LOW <= ratio <= POLISH_CJK_HIGH):
             retried = True
+            cjk_triggered += 1
+            cjk_retried_n += 1
             logger.warning(f"[polish] {name} 守恒超界 ratio={ratio:.2f}"
                            f"（{src_cjk}→{out_cjk}）· 带字数指令重试 1 次")
             user2 = user + (
@@ -2015,9 +2020,17 @@ def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
             reply2, used_profile = call_gen_model(loader, system, user2, creative=True)
             body2 = clean_polished_body(reply2)
             out2 = cio.count_cjk(body2)
-            if abs(out2 / max(src_cjk, 1) - 1.0) < abs(ratio - 1.0):
-                body, out_cjk = body2, out2
-                ratio = out_cjk / max(src_cjk, 1)
+            ratio2 = out2 / max(src_cjk, 1)
+            if POLISH_CJK_LOW <= ratio2 <= POLISH_CJK_HIGH:
+                body, out_cjk, ratio = body2, out2, ratio2
+            else:
+                # 重试仍超界（含比首稿更差的情况）→ 整段保留 Claude 亲笔原稿，不收违反
+                # 「等体量」红线的润色稿（与引号维度对称·亲笔优先）。
+                cjk_kept_n += 1
+                cjk_kept_claude = True
+                body, out_cjk, ratio = src, src_cjk, 1.0
+                logger.warning(f"[polish] {name} 字数守恒重试仍超界(ratio2={ratio2:.2f}) "
+                               f"→ 保留 Claude 亲笔原段（亲笔优先·该段跳过润色稿）")
         # 引号占比守恒核查（字数守恒定稿后跑；重试稿须同时过两道守恒才收）
         out_quote = calc_dialogue_ratio(body)
         q_retried = False
@@ -2053,6 +2066,7 @@ def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
         polished.append(body)
         trace.append({'scene': name, 'src_cjk': src_cjk, 'out_cjk': out_cjk,
                       'ratio': round(ratio, 3), 'retried': retried,
+                      'cjk_kept_claude': cjk_kept_claude,
                       'src_quote_ratio': round(src_quote, 4),
                       'out_quote_ratio': round(out_quote, 4),
                       'quote_retried': q_retried,
@@ -2062,6 +2076,9 @@ def polish_pipeline(loader: GenModelLoader, project_root: Path, cluster_id: int,
     return "\n\n".join(polished), used_profile, {
         'mode': 'per_scene_polish_v29', 'scenes': trace,
         'conservation_band': [POLISH_CJK_LOW, POLISH_CJK_HIGH],
+        'cjk_guard': {'scenes_triggered': cjk_triggered,
+                      'scenes_retried': cjk_retried_n,
+                      'scenes_kept_claude': cjk_kept_n},
         'quote_guard': {'floor_ratio': POLISH_QUOTE_FLOOR,
                         'min_abs_drop': POLISH_QUOTE_MIN_ABS_DROP,
                         'scenes_triggered': quote_triggered,

@@ -78,6 +78,45 @@ def test_dispatch_content_embed_task(monkeypatch):
     assert payload["results"][1]["source"] == "content_embed"
 
 
+def test_per_task_locks_slow_task_does_not_block_other_task(monkeypatch):
+    """回归锁（2026-07-17 audit 并发假活实战）：推理锁必须 per-task——task A 的懒加载/
+    长批推理持锁期间，task B 的请求必须能并行完成。全局单锁会让 audit 并发 10+ scanner
+    时全部堵在一把锁后（客户端超时断开·服务端消化积压 = /health 活着但 /infer 假死）。"""
+    import threading as _th
+    a_entered = _th.Event()
+    a_release = _th.Event()
+
+    def slow_a(items, model=None):
+        a_entered.set()
+        assert a_release.wait(timeout=10), "测试保护：slow_a 未被释放"
+        return [{"ok": "a"} for _ in items]
+
+    monkeypatch.setitem(daemon_mod._TASK_HANDLERS, "surprisal", slow_a)
+    monkeypatch.setitem(daemon_mod._TASK_HANDLERS, "vad",
+                        lambda items, model=None: [{"ok": "b"} for _ in items])
+    monkeypatch.setattr(daemon_mod, "_STATE", daemon_mod._DaemonState("tok-lk"))
+
+    results = {}
+
+    def call(task, key):
+        results[key] = daemon_mod.dispatch_request(
+            "POST", "/infer", {"X-Ruoyu-Token": "tok-lk"},
+            json.dumps({"task": task, "items": ["x"]}).encode("utf-8"))
+
+    ta = _th.Thread(target=call, args=("surprisal", "a"))
+    ta.start()
+    assert a_entered.wait(timeout=10), "slow_a 未进入"
+    # A 持 surprisal 锁挂起期间，B(vad) 必须立刻完成
+    tb = _th.Thread(target=call, args=("vad", "b"))
+    tb.start()
+    tb.join(timeout=5)
+    assert not tb.is_alive(), "vad 请求被 surprisal 的锁堵死——per-task 锁失效"
+    assert results["b"][0] == 200 and results["b"][1]["ok"] is True
+    a_release.set()
+    ta.join(timeout=10)
+    assert results["a"][0] == 200 and results["a"][1]["ok"] is True
+
+
 def test_client_module_importable_and_disabled_by_default(monkeypatch):
     monkeypatch.delenv("RUOYU_NN_DAEMON", raising=False)
     assert client.enabled() is False

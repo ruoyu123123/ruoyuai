@@ -61,17 +61,22 @@ def test_styles_dir_derived_from_project_path():
     sd = ip._styles_dir(proj)
     assert sd == (_ROOT / "workspace" / "styles").resolve() or \
         sd == _ROOT / "workspace" / "styles", f"未从项目路径派生 styles: {sd}"
-    # 仓库有风格库 → 从项目路径 emit 非空
+    # 种临时风格夹具 → 从项目路径 emit 应发现它（不依赖用户真风格库·库可为空）
     real = _ROOT / "workspace" / "novels" / "__styletest_reg__"
     real.mkdir(parents=True, exist_ok=True)
+    fixture = _ROOT / "workspace" / "styles" / "__styletest_fixture__"
+    fixture.mkdir(parents=True, exist_ok=True)
+    (fixture / "作者风格.json").write_text("{}", encoding="utf-8")
     try:
         ip.emit_style_options(real)
         opts = json.loads((real / "_数据库" / ".wal" / "style_options.json")
                           .read_text(encoding="utf-8"))
-        assert len(opts["styles"]) > 0, "从项目路径派生应找到仓库风格库"
+        names = [s["name"] for s in opts["styles"]]
+        assert "__styletest_fixture__" in names, f"从项目路径派生应找到风格夹具: {names}"
     finally:
         import shutil
         shutil.rmtree(real, ignore_errors=True)
+        shutil.rmtree(fixture, ignore_errors=True)
 
 
 def test_nonexistent_style_exits_2():

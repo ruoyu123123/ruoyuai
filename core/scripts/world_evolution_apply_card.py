@@ -240,8 +240,22 @@ def apply_selected_card(project_root: Path, next_key: str, choice_path: Path) ->
     ripple_match = str(brief.get("ripple_match") or "").strip()
     print(f"[selected_cluster_card] {cluster_id}: {title}")
 
+    # 🔴 agent 合约（novel-outline-planner.md 第531行）："ripple_match 必须是真实可匹配的
+    # 标签或空字符串"——空字符串是合法声明"本 cluster 不触发涟漪"（如故事节奏刻意把某条
+    # 规则留到后续 ME 才触发），不是缺失字段。只有非空但零匹配才是真正的作者笔误。
     if not ripple_match:
-        raise ValueError("selected cluster brief ripple_match must be non-empty")
+        print("[apply_minor_event] ripple_match='' → 本 cluster 声明不触发涟漪（合法留白）")
+        _write_cluster_choice(
+            project_root, cluster_id, brief, metadata,
+            {
+                "trigger_type": None,
+                "ripple_match": "",
+                "cluster_id": cluster_id,
+                "matched_rules": [],
+                "applied_count": 0,
+            },
+        )
+        return 0
 
     db = project_root / f"_{DB_DIR}"
     world_path = db / WORLD_STATE_FILE

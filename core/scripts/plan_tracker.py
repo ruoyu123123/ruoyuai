@@ -408,7 +408,10 @@ def make_plan_id(command: str, project: str, key: str | None) -> str:
         keypart = key
     else:
         keypart = "main"
-    project_part = project if project else "noproject"
+    # plan_id 只取项目名（basename）：--project 允许传路径（workspace/styles/X），
+    # 但 id 含路径分隔符会在 .plans/ 下嵌套建目录，且 hook 的 plan_id 正则(\w[\w\-]*)
+    # 匹配不到分隔符 → 合法 step 调用被误拦。id 必须无分隔符。
+    project_part = Path(str(project).replace("\\", "/")).name if project else "noproject"
     return f"{project_part}_{keypart}_{command}_{ts}{micro}{rand}"
 
 
@@ -458,6 +461,12 @@ def create_plan(
     out_dir = runtime_plans_dir(project)
     out_path = out_dir / f"{plan_id}.json"
     _save_plan(out_path, plan)  # 创建即盖 attestation 章
+    # plan_id 只含项目 basename，工作区外项目（任意路径）无法从 id 反解目录——
+    # 落 locator 指针让 _find_plan_path 按 id 定位任意位置的 plan。
+    if out_dir != GLOBAL_PLANS_DIR:
+        GLOBAL_PLANS_DIR.mkdir(parents=True, exist_ok=True)
+        (GLOBAL_PLANS_DIR / f"{plan_id}.locator").write_text(
+            str(out_path.resolve()), encoding="utf-8")
     return plan_id
 
 
@@ -470,6 +479,12 @@ def _find_plan_path(plan_id: str) -> Path:
     primary = runtime_plans_dir(project) / f"{plan_id}.json"
     if primary.exists():
         return primary
+    # locator 指针（create_plan 落盘）：工作区外项目按 id 定位的唯一通路
+    locator = GLOBAL_PLANS_DIR / f"{plan_id}.locator"
+    if locator.exists():
+        located = Path(locator.read_text(encoding="utf-8").strip())
+        if located.exists():
+            return located
     # 兜底：扫所有可能位置
     candidates = [GLOBAL_PLANS_DIR]
     if PROJECTS_DIR.exists():

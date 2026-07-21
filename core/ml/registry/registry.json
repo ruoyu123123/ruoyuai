@@ -16,7 +16,7 @@
           "env_gate": "RUOYU_NN_COHERENCE",
           "status": "shadow",
           "registered_at": "2026-06-29T14:46:20Z",
-          "updated_at": "2026-07-16T04:54:15Z"
+          "updated_at": "2026-07-19T13:44:16Z"
         }
       ],
       "active_version": null,
@@ -34,7 +34,7 @@
           "env_gate": "RUOYU_NN_VAD",
           "status": "active",
           "registered_at": "2026-06-29T14:46:20Z",
-          "updated_at": "2026-07-16T04:54:15Z"
+          "updated_at": "2026-07-19T13:44:16Z"
         }
       ],
       "active_version": "v1",
@@ -50,7 +50,7 @@
           "env_gate": "EMBED_BACKEND",
           "status": "active",
           "registered_at": "2026-06-29T14:46:20Z",
-          "updated_at": "2026-07-16T04:54:15Z"
+          "updated_at": "2026-07-19T13:44:16Z"
         }
       ],
       "active_version": "v1",
@@ -66,7 +66,7 @@
           "env_gate": "RUOYU_NN_SURPRISAL",
           "status": "active",
           "registered_at": "2026-07-07T14:13:31Z",
-          "updated_at": "2026-07-16T04:54:15Z"
+          "updated_at": "2026-07-19T13:44:16Z"
         }
       ],
       "active_version": "uer-gpt2-chinese-cluecorpussmall",
@@ -82,7 +82,7 @@
           "env_gate": "RUOYU_NN_NLI",
           "status": "active",
           "registered_at": "2026-07-14T08:25:02Z",
-          "updated_at": "2026-07-16T04:54:15Z"
+          "updated_at": "2026-07-19T13:44:16Z"
         }
       ],
       "active_version": "IDEA-CCNL-Erlangshen-Roberta-110M-NLI",
@@ -101,7 +101,7 @@
           "env_gate": "RUOYU_CONTENT_EMBED_CKPT",
           "status": "active",
           "registered_at": "2026-07-14T08:25:02Z",
-          "updated_at": "2026-07-16T04:54:15Z"
+          "updated_at": "2026-07-19T13:44:16Z"
         }
       ],
       "active_version": "BAAI-bge-small-zh-v1.5",

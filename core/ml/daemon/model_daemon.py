@@ -321,7 +321,15 @@ class _DaemonState:
         self.token = token
         self.start_time = time.time()
         self.last_request_ts = time.time()
-        self.lock = threading.Lock()   # 全局推理锁：GPU 推理串行化·避免并发显存竞争
+        # 每 task 一把推理锁：同一模型串行化（防并发抖动/显存竞争），不同模型互不阻塞。
+        # 全局单锁会让任一模型的懒加载(~90s)/长批推理把其它模型的请求全部堵在锁后——
+        # audit 并发 10+ scanner 时队列长期不空，客户端超时断开后服务端仍在消化积压 = 假活。
+        self._task_locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    def lock_for(self, task: str) -> threading.Lock:
+        with self._locks_guard:
+            return self._task_locks.setdefault(task, threading.Lock())
 
 
 _STATE: "_DaemonState | None" = None
@@ -356,7 +364,7 @@ def _dispatch_infer(body: dict) -> "tuple[int, dict]":
         return 200, {"ok": True, "results": []}
     handler = _TASK_HANDLERS[task]
     try:
-        with _STATE.lock:  # 全局推理锁：整个 task 调用（含首次懒加载）都串行化
+        with _STATE.lock_for(task):  # per-task 推理锁：同模型串行化（含首次懒加载），跨模型并行
             results = handler(items, model=model)
     except Exception as e:  # noqa: BLE001 该 task 加载/推理异常 → 标记不可用·不影响其它 task
         err = f"{type(e).__name__}: {str(e)[:200]}"

@@ -52,7 +52,8 @@ def test_low_confidence_and_under_min_excluded():
 
 
 def test_knowledge_gap_inject_three_modes():
-    """D3-3：_collect_knowledge_gap_directives 三态（默认 shadow 落盘不注入·active 注入·off None）。"""
+    """D3-3：_collect_knowledge_gap_directives 三态（默认 active 注入·shadow 落盘不注入·off None·
+    2026-07-18 G3-ENUMKAPPA PASS 后默认由 shadow 切 active）。"""
     import os
     import tempfile
     import build_manifest as bm
@@ -77,13 +78,13 @@ def test_knowledge_gap_inject_three_modes():
     bak = os.environ.get("KNOWLEDGE_GAP_INJECT_MODE")
     try:
         with tempfile.TemporaryDirectory() as td:
-            os.environ.pop("KNOWLEDGE_GAP_INJECT_MODE", None)  # 默认 shadow
-            assert bm._collect_knowledge_gap_directives(_S(prof, Path(td))) is None
-            assert (Path(td) / ".knowledge_gap" / "ch_001.json").exists()  # shadow 落盘
-            os.environ["KNOWLEDGE_GAP_INJECT_MODE"] = "active"
+            os.environ.pop("KNOWLEDGE_GAP_INJECT_MODE", None)  # 默认 active
             p = bm._collect_knowledge_gap_directives(_S(prof, Path(td)))
             assert p is not None and p["advisory_only"] is True
             assert any("信息差主调" in d for d in p["directives"])
+            os.environ["KNOWLEDGE_GAP_INJECT_MODE"] = "shadow"
+            assert bm._collect_knowledge_gap_directives(_S(prof, Path(td))) is None
+            assert (Path(td) / ".knowledge_gap" / "ch_001.json").exists()  # shadow 落盘
             os.environ["KNOWLEDGE_GAP_INJECT_MODE"] = "off"
             assert bm._collect_knowledge_gap_directives(_S(prof, Path(td))) is None
     finally:

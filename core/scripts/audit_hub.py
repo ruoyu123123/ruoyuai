@@ -270,7 +270,7 @@ def _run(cmd: list, env_extra: dict = None, timeout: int = 180) -> tuple:
     """跑子进程，返回 (exit_code, stdout, stderr)。子进程隔离 —— 任一校验器挂了不连累其他。
 
     env_extra: 传 {"CLUSTER_MODE": "1"} 让子进程 scanner 感知 cluster 视野。
-    timeout: 秒。NN scanner 批推理需要更长(300s)。
+    timeout: 秒。NN scanner 批推理需要更长(600s·per-task 锁排队口径)。
     """
     try:
         # 强制子进程 UTF-8 输出：否则 GBK 控制台/无 PYTHONIOENCODING 的父环境(如 agent 上下文)下
@@ -3064,7 +3064,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
                      out, "surprisal_scanner", "风格"),
-                 300),
+                 600),
                 # [NN⑥] 主题漂移 · embedding cosine 距离 vs scope_summary
                 # · EMBED_BACKEND 非 hash 才激活·advisory·默认 shadow
                 ("topic_drift",
@@ -3073,7 +3073,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
                      out, "topic_drift_scanner", "风格"),
-                 300),
+                 600),
                 # [NN③A] 情感弧线分类 · Reagan 六弧型 · 复用 VAD 或词典兜底
                 # · RUOYU_NN_VAD 门控(VAD 桥不可用退词典)·advisory·默认 shadow
                 ("emotion_arc",
@@ -3082,7 +3082,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
                      out, "emotion_arc_classifier", "风格"),
-                 300),
+                 600),
                 # [NN①] 段落连贯性 · 相邻段对 BERT 二分类 + 滑窗
                 # · RUOYU_NN_COHERENCE 门控(桥不可用返回空)·advisory·默认 shadow
                 ("coherence",
@@ -3091,7 +3091,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
                      out, "coherence_scanner", "风格"),
-                 300),
+                 600),
                 # [NN⑤④] 角色一致性 · 角色网络+共指消解整合
                 # · CHARACTER_CONSISTENCY_MODE 门控(默认 shadow)·advisory
                 ("character_consistency",
@@ -3100,7 +3100,7 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
                  {0, 1},
                  lambda out, code: _parse_issues_list_scanner(
                      out, "character_consistency_scanner", "角色"),
-                 300),
+                 600),
                 # 身份锚点漂移 · 人物卡 identity_anchors（发色/瞳色/疤痕）
                 # 近旁叙述不得漂移（borrowed from moyin-creator 身份锚点·散文连续性版）
                 # · CHARACTER_IDENTITY_ANCHOR_MODE 默认 shadow · advisory
@@ -3375,9 +3375,11 @@ def audit_chapter(project_root: Path, ch: int, auto_fix: bool,
     def _exec_one(task):
         name, cmd, ok_set, parse_fn = task[:4]
         # 默认 300s：NN 开启后 VAD/coherence/emotion 等 scanner 需 spawn venv + 加载模型(~90s+)·
-        # 显式 task[4] 可覆盖（5 个 NN scanner 已显式 300）。非 NN scanner 秒退不受影响·
-        # 只有真卡死才等满（罕见·兜底）。根治 emotion_granularity 等 VAD scanner 180s 超时(exit 99)。
-        task_timeout = task[4] if len(task) > 4 else 300
+        # 显式 task[4] 可覆盖（5 个 NN scanner 已显式 600）。非 NN scanner 秒退不受影响·
+        # 只有真卡死才等满（罕见·兜底）。600s 口径：per-task 锁下同模型多 scanner 串行排队，
+        # 队尾 scanner 的有效预算 = 上限 - 前面同模型 scanner 总耗时，300s 对 1.2w+ CJK
+        # cluster 的 CPU 推理排队场景不够（emotion_arc 连续 5 轮超时实证）。
+        task_timeout = task[4] if len(task) > 4 else 600
         # cluster 调用上下文给 scanner 传 CLUSTER_MODE=1 env
         code, out, err = _run(cmd, env_extra=_env_extra, timeout=task_timeout)
         try:

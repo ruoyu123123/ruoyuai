@@ -267,9 +267,12 @@ def main(argv: list[str] | None = None) -> int:
             + build_av_judge_prompt(author_text, replica_text, SAMPLE_LIMIT,
                                     swap=swap, include_intent_dim=intent)
         )
-        prompt_sha = _sha256_bytes(prompt_text.encode("utf-8"))
+        # write_bytes 保证磁盘字节 == 声明哈希（write_text 在 Windows 会把 \n 翻译成 \r\n，
+        # manifest 哈希对不上磁盘 → 幂等补写检查永真 + judge 无法核验输入完整性）。
+        prompt_bytes = prompt_text.encode("utf-8")
+        prompt_sha = _sha256_bytes(prompt_bytes)
         if _sha256_file(prompt_path) != prompt_sha:
-            prompt_path.write_text(prompt_text, encoding="utf-8")
+            prompt_path.write_bytes(prompt_bytes)
         job = {
             "job_id": job_id,
             "swap": swap,

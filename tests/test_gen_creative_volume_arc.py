@@ -127,6 +127,22 @@ def test_normalize_volume_chunk_backfill_and_reject():
     assert dup_in is None, "chunk 内 id 重复应判破损"
 
 
+def test_normalize_volume_chunk_rejects_noncanonical_me_id():
+    """回归锁（2026-07-17 真机实战）：ME id 必须 canonical `ME-V<卷>-<序>`
+    （world_evolution_engine.ME_ID_RE 单一真理源）。下划线等非 canonical id
+    （ME_v5_08）能过旧验收，但 fate_event 涟漪规则以 ME id 为 trigger，
+    派生出的规则永不点火（死规则）——必须在单元验收就判破损退回重写。"""
+    underscore, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME_v3_01", "is_volume_finale": True}]}, 3)
+    assert underscore is None and "canonical" in diag, f"下划线 id 应判破损: {diag}"
+    freeform, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "主线事件一", "is_volume_finale": True}]}, 3)
+    assert freeform is None, f"自由文本 id 应判破损: {diag}"
+    canonical, diag = gva._normalize_volume_chunk(
+        {"major_events": [{"id": "ME-V3-01", "is_volume_finale": True}]}, 3)
+    assert canonical is not None, f"canonical id 应通过: {diag}"
+
+
 def test_normalize_volume_chunk_rejects_bad_finale_flag():
     """is_volume_finale 缺失/非 bool → 判破损（退回 pending·不放行到最终 emit 才炸
     未捕获 ValueError）。"""

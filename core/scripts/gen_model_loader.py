@@ -285,7 +285,7 @@ def reasoning_extra_body(profile) -> dict:
 
     所有走 OpenAI 兼容 chat.completions.create 的 gen-model 调用统一用此构造 extra_body，防止
     inline 漂移/漏注入——独立裸调用容易漏 reasoning 控制，导致 thinking 暴走、content 空、500。
-    thinking_level=gemini 专有(pie-xian 认)·reasoning_effort=OpenAI 标准(elysiver/new-api 中转认)·
+    thinking_level=gemini 专有(pie-xian 认)·reasoning_effort=OpenAI 标准(new-api 类中转认)·
     二者独立按 profile 配。空 dict=非 reasoning profile(flash 等)不注入。"""
     e = {}
     if getattr(profile, "thinking_level", None):

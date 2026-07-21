@@ -297,11 +297,14 @@ class TestCallGenModelRefusalRetry:
         assert last_user.count("文学小说复刻任务") == 1
         assert text == body_normal
 
-    def test_empty_response_still_falls_back(self, monkeypatch):
-        """refusal-retry 不破坏既有空响应守卫：empty body → 走 fallback profile。"""
+    def test_empty_response_retries_then_falls_back(self, monkeypatch):
+        """refusal-retry 不破坏空响应守卫：empty body 先同 profile 重试（共享 attempt 预算·
+        中转瞬时抽风为主），预算耗尽（max_retries=2 → 3 次尝试）才降级 fallback profile。"""
         body_normal = "晨光照进窗。" * 400
         fake = _FakeOpenAIClient([
-            ("text", ""),                # active 空响应 → 既有守卫触发 fallback
+            ("text", ""),                # active 空响应 · 尝试 1
+            ("text", ""),                # active 空响应 · 重试 1
+            ("text", ""),                # active 空响应 · 重试 2 → 预算耗尽降级
             ("text", body_normal),       # fallback 正常
         ])
         self._patch_openai(monkeypatch, fake)
@@ -310,6 +313,21 @@ class TestCallGenModelRefusalRetry:
         text, profile, _ = dr.call_gen_model(loader, "sys", "USER", default_max_tokens=4000)
 
         assert profile.name == "fallback1"
+        assert text == body_normal
+
+    def test_empty_response_transient_heals_same_profile(self, monkeypatch):
+        """空响应瞬时自愈：active 空一次 → 同 profile 重试拿到正文 · 不降级。"""
+        body_normal = "晨光照进窗。" * 400
+        fake = _FakeOpenAIClient([
+            ("text", ""),                # active 空响应 · 尝试 1
+            ("text", body_normal),       # active 重试成功
+        ])
+        self._patch_openai(monkeypatch, fake)
+
+        loader = _make_loader([_make_profile("active"), _make_profile("fallback1")])
+        text, profile, _ = dr.call_gen_model(loader, "sys", "USER", default_max_tokens=4000)
+
+        assert profile.name == "active"
         assert text == body_normal
 
 

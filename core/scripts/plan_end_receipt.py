@@ -56,8 +56,16 @@ def _load_plan(project: Path, plan_id: str, command: str) -> dict:
     return plan
 
 
-def _verified_paths(project: Path, step: dict) -> list[str]:
-    """step.verified_outputs 的实体文件必须仍在磁盘上。"""
+def _verified_paths(step: dict) -> list[str]:
+    """step.verified_outputs 的实体文件必须仍在磁盘上。
+
+    plan_tracker._verify_outputs 写入 verified_outputs 时已经把 project_root 拼进去
+    （project_root 本身是相对 cwd/仓库根的路径，如 "workspace/novels/X"）——
+    条目已是相对仓库根的**完整**路径，不是相对 project 再拼一层的短路径。这里若再拿
+    project（本函数入参，已 .resolve() 成绝对路径）去 join，会把 project 路径重复拼两次
+    （如 .../workspace/novels/X/workspace/novels/X/_数据库/...），文件必然"丢失"。
+    非绝对路径按 cwd（脚本调用方约定的仓库根）解析即可，不与 project 重新拼接。
+    """
     verified = step.get("verified_outputs") or []
     if not verified:
         raise ValueError(
@@ -66,12 +74,10 @@ def _verified_paths(project: Path, step: dict) -> list[str]:
     paths = []
     for raw in verified:
         p = Path(str(raw))
-        if not p.is_absolute():
-            p = project / str(raw)
         if not p.exists():
             raise ValueError(
                 f"step {step.get('n')} 的 verified_output 已丢失: {raw}")
-        paths.append(str(p).replace("\\", "/"))
+        paths.append(str(p.resolve()).replace("\\", "/"))
     return paths
 
 
@@ -109,7 +115,7 @@ def build_receipt(project: Path, plan_id: str, step: str, command: str) -> dict:
             "n": row.get("n"),
             "name": row.get("name"),
             "completed_at": row.get("completed_at"),
-            "verified_outputs": _verified_paths(project, row),
+            "verified_outputs": _verified_paths(row),
         })
     if not steps_report:
         raise ValueError("plan 无前置 required step，收尾校验空转")

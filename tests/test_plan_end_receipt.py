@@ -76,6 +76,29 @@ def test_missing_verified_file_fatal(tmp_path, monkeypatch):
         per.build_receipt(tmp_path, "PID", "7", "cluster-write")
 
 
+def test_relative_verified_output_not_double_joined_with_project(tmp_path, monkeypatch):
+    """回归锁（2026-07-17 真机实战撞坑）：plan_tracker._verify_outputs 写入
+    verified_outputs 时已经把 project_root 拼过一次（project_root 本身就是相对 cwd 的
+    路径，如 "workspace/novels/X"）——条目已是相对仓库根的完整路径。旧代码在
+    _verified_paths 里又拿 project（已 .resolve() 成绝对路径）去 join 了第二次，产出
+    .../X/workspace/novels/X/... 的双重前缀路径，文件必然"丢失"，即便它真实存在。"""
+    project_rel = Path("workspace") / "novels" / "回归书"
+    out_rel = project_rel / "_数据库" / ".wal" / "cluster_001_pre_write_gate.json"
+    (tmp_path / out_rel).parent.mkdir(parents=True)
+    (tmp_path / out_rel).write_text("{}", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    project_abs = (tmp_path / project_rel).resolve()
+    plan = _plan(project_abs, [
+        {"n": 1, "name": "manifest", "required": True, "status": "completed",
+         "verified_outputs": [str(out_rel).replace("\\", "/")]},
+        {"n": 7, "name": "plan-end", "required": True, "status": "pending"},
+    ])
+    _install(monkeypatch, project_abs, plan)
+    receipt = per.build_receipt(project_abs, "PID", "7", "cluster-write")
+    assert receipt["completed"] is True
+    assert receipt["verified_required_steps"] == 1
+
+
 def test_prior_required_step_not_completed_fatal(tmp_path, monkeypatch):
     """前置 required step 未完成 → 收尾 step 不得跳过 → FATAL。"""
     plan = _plan(tmp_path, [

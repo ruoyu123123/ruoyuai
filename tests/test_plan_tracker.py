@@ -154,8 +154,10 @@ def test_create_plan_records_microsecond_created_at():
         pt.PROJECTS_DIR = root / "novels"
         pt.GLOBAL_PLANS_DIR = root / "plans"
         pt.ATTEST_KEY_PATH = root / "plans" / ".attest_key"
-        project = root / "novel"
-        project.mkdir()
+        # 项目须放在 PROJECTS_DIR 下（真实布局）：plan_id 只含项目名，
+        # _find_plan_path 靠 PROJECTS_DIR/<名> 回查。
+        project = pt.PROJECTS_DIR / "novel"
+        project.mkdir(parents=True)
         try:
             plan_id = pt.create_plan("cluster-save-state", str(project), "1")
             created = pt.get_plan(plan_id)["created_at"]
@@ -179,6 +181,17 @@ def test_make_plan_id_format_and_uniqueness():
     # 无 project/key → noproject/main
     d = pt.make_plan_id("outline", "", None)
     assert d.startswith("noproject_main_outline_")
+
+
+def test_make_plan_id_strips_path_separators():
+    """🔴 回归锁（2026-07-16 真机抓出）：--project 传路径（文档口径「<风格库路径>」）时
+    plan_id 曾原样嵌入斜杠 → .plans/ 下嵌套建目录 + step-research hook 的 plan_id
+    正则(\\w[\\w\\-]*)匹配不到分隔符 → 合法 step 调用被误拦。id 只取 basename。"""
+    for proj in ("workspace/styles/样例风格", "workspace\\novels\\某书", "D:/x/y/书名"):
+        pid = pt.make_plan_id("distill-style", proj, None)
+        assert "/" not in pid and "\\" not in pid, f"plan_id 含路径分隔符: {pid}"
+    assert pt.make_plan_id("distill-style", "workspace/styles/样例风格", None) \
+        .startswith("样例风格_main_distill-style_")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -218,6 +231,21 @@ def test_create_get_roundtrip_and_verify_ok():
         # 运行时字段补全
         assert all(s.get("status") == pt.STATUS_PENDING for s in plan["steps"])
         # 创建即盖章 → 防篡改校验 ok
+        assert pt.verify_plan(pid) == "ok"
+
+
+def test_create_get_roundtrip_out_of_workspace_project():
+    """回归锁：plan_id 只含项目 basename 后，工作区外项目（任意路径·如 tmp）必须仍能
+    按 id 定位——create_plan 落 GLOBAL_PLANS_DIR/{plan_id}.locator 指针，
+    _find_plan_path 主查失败后走 locator。"""
+    with _sandbox() as tmp:
+        proj = tmp / "外部项目"
+        (proj / "_数据库").mkdir(parents=True)
+        pid = pt.create_plan("distill-character", str(proj), key="李若渝")
+        assert pid.startswith("外部项目_李若渝_")
+        assert (pt.GLOBAL_PLANS_DIR / f"{pid}.locator").exists()
+        plan = pt.get_plan(pid)
+        assert plan["command"] == "distill-character"
         assert pt.verify_plan(pid) == "ok"
 
 
@@ -280,28 +308,35 @@ def test_step_output_resolves_relative_to_project_root_without_doubling():
     骨架文件）；--output 自身的存在性判定不受 skip_output 影响（op.exists() 无条件跑），
     本测试真正锁住的是 --output 路径解析逻辑本身。
     """
-    with _sandbox():
-        proj_tmp = Path(tempfile.mkdtemp())
+    with _sandbox() as tmp:
+        # 项目放在沙盒 PROJECTS_DIR 下（真实布局）：plan_id 只含项目名，
+        # _find_plan_path 靠 PROJECTS_DIR/<名> 回查。
+        saved_projects = pt.PROJECTS_DIR
+        pt.PROJECTS_DIR = tmp / "novels"
+        proj_tmp = pt.PROJECTS_DIR / "沙盒书"
         (proj_tmp / "_数据库" / ".wal").mkdir(parents=True)
         out_file = proj_tmp / "_数据库" / ".wal" / "002_apply_cluster.json"
         out_file.write_text("{}", encoding="utf-8")
 
-        pid = pt.create_plan("cluster-write", str(proj_tmp), key="001")
-        plan = pt.get_plan(pid)
-        assert plan["project"] == str(proj_tmp)
+        try:
+            pid = pt.create_plan("cluster-write", str(proj_tmp), key="001")
+            plan = pt.get_plan(pid)
+            assert plan["project"] == str(proj_tmp)
 
-        # 正确用法：project-root 相对路径，不带项目自身路径前缀
-        pt.step_complete(pid, 1, output="_数据库/.wal/002_apply_cluster.json", skip_output=True)
-        plan = pt.get_plan(pid)
-        step1 = next(s for s in plan["steps"] if s["n"] == 1)
-        assert step1["status"] == pt.STATUS_COMPLETED
-        verified = step1.get("verified_outputs", [])
-        assert any(str(out_file).replace("\\", "/") in v for v in verified), (
-            f"verified_outputs 应含单层拼接路径，得 {verified}"
-        )
-        # 双重前缀（模拟文档误用形态）不该恰好也存在，否则测试本身失去意义
-        doubled = proj_tmp / proj_tmp.name / "_数据库" / ".wal" / "002_apply_cluster.json"
-        assert not doubled.exists()
+            # 正确用法：project-root 相对路径，不带项目自身路径前缀
+            pt.step_complete(pid, 1, output="_数据库/.wal/002_apply_cluster.json", skip_output=True)
+            plan = pt.get_plan(pid)
+            step1 = next(s for s in plan["steps"] if s["n"] == 1)
+            assert step1["status"] == pt.STATUS_COMPLETED
+            verified = step1.get("verified_outputs", [])
+            assert any(str(out_file).replace("\\", "/") in v for v in verified), (
+                f"verified_outputs 应含单层拼接路径，得 {verified}"
+            )
+            # 双重前缀（模拟文档误用形态）不该恰好也存在，否则测试本身失去意义
+            doubled = proj_tmp / proj_tmp.name / "_数据库" / ".wal" / "002_apply_cluster.json"
+            assert not doubled.exists()
+        finally:
+            pt.PROJECTS_DIR = saved_projects
 
 
 if __name__ == "__main__":

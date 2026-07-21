@@ -194,11 +194,23 @@ def test_generate_cont_msg_builder_used():
     assert seen == [("length", 1)] and calls[1]["cont_msg"] == "续写JSON第1轮"
 
 
-def test_generate_empty_response_degrades():
-    fn, _ = _mk_stream([("   ", "stop"), ("有货", "stop")])
+def test_generate_empty_response_retries_same_profile():
+    """空响应（HTTP200 零 content）以中转层瞬时抽风为主 → 同 attempt 预算重试同 profile，
+    不立即降级（fallback 链可能整条不可用·真实撞过 elysiver 403 死链全场报废）。"""
+    fn, calls = _mk_stream([("   ", "stop"), ("有货", "stop")])
     r = lt.generate([_profile("p1"), _profile("p2")], "s", "u",
                     retry=_FAST, _stream_fn=fn)
-    assert r.text == "有货" and r.fallback_index == 1
+    assert r.text == "有货" and r.fallback_index == 0 and r.retries == 1
+    assert all(c["profile"] == "p1" for c in calls)
+
+
+def test_generate_empty_response_exhausted_degrades():
+    """空响应重试耗尽（max_retries）→ TransportEmpty 降级下一 profile（真内容过滤稳定复现）。"""
+    fn, calls = _mk_stream([("", "stop")] * 3 + [("备胎有货", "stop")])
+    r = lt.generate([_profile("p1"), _profile("p2")], "s", "u",
+                    retry=_FAST, _stream_fn=fn)
+    assert r.text == "备胎有货" and r.fallback_index == 1
+    assert calls[-1]["profile"] == "p2"
 
 
 def test_generate_all_fail_raises_exhausted():

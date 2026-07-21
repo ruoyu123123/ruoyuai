@@ -628,10 +628,11 @@ def generate(loader_or_profiles, system: str, user: str, *,
         current_user = user   # refusal_transform 可改写（追加声明）·续写圈沿用
         retries_used = 0
         try:
-            # —— 同 profile 重试圈（瞬时错误 + 间歇性 refusal 共享 attempt 预算） ——
+            # —— 同 profile 重试圈（瞬时错误 + 空响应 + 间歇性 refusal 共享 attempt 预算） ——
             # 瞬时类 TransportError（中转站偶发 404/5xx/断流）同 profile 重试；
             # 认证/账号类（401/403/key）不可恢复 → 立即降级不浪费退避。
-            # TransportEmpty（内容过滤）也不重试。
+            # 空响应（HTTP200 零 content）以中转层瞬时抽风为主，真内容过滤会稳定复现——
+            # 同 attempt 预算重试，耗尽才降级（TransportEmpty 消息不含认证关键词，走瞬时分支）。
             # refusal_check 命中（HTTP200 非空但内容是短安全拒绝）→ 同 attempt 预算改写重试。
             attempt = 0
             while True:
@@ -641,8 +642,6 @@ def generate(loader_or_profiles, system: str, user: str, *,
                                        temperature=temperature,
                                        response_format_json=response_format_json,
                                        echo=echo, **_client_kw)
-                except TransportEmpty:
-                    raise                          # 空响应非瞬时 → 直接降级
                 except TransportError as re_err:
                     msg = str(re_err)
                     non_transient = any(k in msg for k in (
@@ -659,7 +658,20 @@ def generate(loader_or_profiles, system: str, user: str, *,
                           f"{delay:.0f}s 后重试 {attempt}/{retry.max_retries}（{src}）…")
                     time.sleep(delay)
                     continue
-                # 成功拿到响应 —— refusal 守卫（仅 refusal_check 提供时·与瞬时重试共享 attempt）
+                # 成功拿到响应 —— 空响应守卫（finish=length 的空响应留给续写圈补全）
+                if not text.strip() and finish != "length":
+                    attempt += 1
+                    retries_used = attempt
+                    if attempt > retry.max_retries:
+                        raise TransportEmpty(
+                            "HTTP 200 但零 content（内容过滤/reasoning 全进 thought）")
+                    delay = retry.delay_for(attempt)
+                    print(f"\n{tag} {profile.name} 空响应（HTTP200 零 content），"
+                          f"{delay:.0f}s 后重试 {attempt}/{retry.max_retries}…",
+                          file=sys.stderr)
+                    time.sleep(delay)
+                    continue
+                # refusal 守卫（仅 refusal_check 提供时·与瞬时重试共享 attempt 预算）
                 if refusal_check is not None and refusal_check(text):
                     attempt += 1
                     retries_used = attempt

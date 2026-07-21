@@ -2,10 +2,14 @@
 # 敏感凭证（严禁入库）
 # ============================================================
 .env
+.env.*
+!.env.example
 .env.local
 .env.backup*
 *.key
 *.pem
+**/credentials.json
+**/service-account*.json
 
 # ============================================================
 # 用户私人内容（每个用户的小说项目独立 Git，不进系统仓库）
@@ -18,8 +22,9 @@ workspace/styles/*
 !workspace/styles/README.md
 !workspace/styles/.gitkeep
 
-# 临时调研缓存（个人 · 不入库）
-workspace/_temp_research/
+# 临时调研缓存（个人 · 不入库；已跟踪的历史报告除外，新文件一律忽略）
+workspace/_temp_research/**
+!workspace/_temp_research/sys_upgrade_20260619/R20_W9_FINAL_REPORT.md
 
 # ============================================================
 # 第三方版权材料（参考小说原文 / 蒸馏中间产物 / 调研缓存）

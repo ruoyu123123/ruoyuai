@@ -4727,6 +4727,10 @@ def _ablate_dimensions() -> set:
       决策/刻画组（_collect_author_decision_principles）：
         B1/B2/B3… = author_decision_principles 对应键（按 key 名匹配·大写归一）
         C1/C2/C3… = characterization_craft 对应键
+      shadow 待验证组（G3-ENUMKAPPA / GENREBASE 消融专用·2026-07-18 补）：
+        D2_TT = _collect_author_rhythm_signature 里的三向度张力配比 directive（D2_TENSION_TYPE_INJECT_MODE）
+        D3_KG = _collect_knowledge_gap_directives 全部输出（KNOWLEDGE_GAP_INJECT_MODE）
+        GENREBASE = _collect_genre_baseline_diff 全部输出（GENREBASE_INJECT_MODE）
 
     ⚠️ 北极星⑤：抹维只影响注入内容（全 advisory directives），**绝不**动 hard_gate。
     消融态非正式写作——设了非空值时往 stderr 打醒目告警。
@@ -4788,10 +4792,12 @@ def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
                           "（爽点/高潮后别秒收·张力撑到收尾·防过早收束）")
     if tt.get("dominant_emotion_shape") and "A3" not in _ablate:
         directives.append(f"情绪弧主形态：{tt['dominant_emotion_shape']}（作者基线形态）")
-    # D2-4：三向度张力机制配比 directive（独立 env D2_TENSION_TYPE_INJECT_MODE 默认 shadow·
-    # G3-ENUMKAPPA 标注一致性 PASS 后才切 active·防注入未验证噪声·北极星⑥用数据定哪维注入）
+    # D2-4：三向度张力机制配比 directive（独立 env D2_TENSION_TYPE_INJECT_MODE·
+    # 2026-07-18 G3-ENUMKAPPA 标注一致性闸 PASS（真机 style cluster auto_001·N=5 独立采样·
+    # mode_ratio=0.7409/kappa=1.0·见 enum_consistency_gate.py）→ 默认切 active）
     ttd = nr.get("tension_type_distribution") or {}
-    if ttd and (_os.environ.get("D2_TENSION_TYPE_INJECT_MODE") or "shadow").strip().lower() == "active":
+    if ttd and "D2_TT" not in _ablate and (
+            _os.environ.get("D2_TENSION_TYPE_INJECT_MODE") or "active").strip().lower() == "active":
         parts = "、".join(f"{k}{v:.0%}" for k, v in list(ttd.items())[:3])
         directives.append(f"张力机制配比（读者信息差三向度·作者基线）：{parts}"
                           "（suspense=读者已知危险等它爆/curiosity=先抛结果勾读者想知道为什么/"
@@ -4833,13 +4839,14 @@ def _collect_author_rhythm_signature(s: "DatabaseScanner") -> dict | None:
 
 
 def _collect_knowledge_gap_directives(s: "DatabaseScanner") -> dict | None:
-    """D3：读者-角色知识差三态注入（env KNOWLEDGE_GAP_INJECT_MODE 默认 shadow·仿 rhythm·advisory）。
+    """D3：读者-角色知识差三态注入（env KNOWLEDGE_GAP_INJECT_MODE·仿 rhythm·advisory）。
 
     读 consolidate 聚合的 knowledge_gap_profile（信息差三态占比 + 释放序列）→ writer 节奏指令。
-    默认 shadow（R2:D3 切 active 前过标注一致性闸 G3 + 消融·区别于 rhythm 的 active）·off 零回归·active 注入。
+    2026-07-18 G3-ENUMKAPPA 标注一致性闸 PASS（真机 style cluster auto_001·N=5 独立采样·
+    mode_ratio=0.6267/kappa=0.5888·见 enum_consistency_gate.py）→ 默认切 active。off 零回归。
     """
     import os as _os
-    mode = (_os.environ.get("KNOWLEDGE_GAP_INJECT_MODE") or "shadow").strip().lower()
+    mode = (_os.environ.get("KNOWLEDGE_GAP_INJECT_MODE") or "active").strip().lower()
     if mode == "off":
         return None
     if mode not in ("shadow", "active"):
@@ -4853,6 +4860,10 @@ def _collect_knowledge_gap_directives(s: "DatabaseScanner") -> dict | None:
         print(f"[WARN] knowledge_gap 读取失败: {e}", file=sys.stderr)
         return None
     if not isinstance(kg, dict) or not kg:
+        return None
+    # R3 ABL-3：消融实验单维抑制（D3_KG·默认空 → 零回归）。
+    _ablate = _ablate_dimensions()
+    if "D3_KG" in _ablate:
         return None
     directives = []
     kgd = kg.get("knowledge_gap_distribution") or {}
@@ -5901,6 +5912,9 @@ def _collect_genre_baseline_diff(s: "DatabaseScanner") -> dict | None:
         return None
     if mode not in ("shadow", "active"):
         mode = "shadow"
+    # R3 ABL-3：消融实验单维抑制（GENREBASE·默认空 → 零回归）。
+    if "GENREBASE" in _ablate_dimensions():
+        return None
     style = s.load("作者风格", {})
     vg = (style.get("quantitative") or {}).get("vs_generic_baseline")
     if not isinstance(vg, dict) or not vg.get("dims"):
@@ -6526,7 +6540,8 @@ def build_manifest(project_root: Path, chapter: int) -> dict:
         "author_style_fingerprint": _collect_author_style_fingerprint(s),
         # 阶段1：作者叙事节奏指纹（序列级骨·env RHYTHM_INJECT_MODE 默认 active·advisory）。
         "author_rhythm_signature": _collect_author_rhythm_signature(s),
-        # D3：读者-角色知识差三态（信息差序列骨·env KNOWLEDGE_GAP_INJECT_MODE 默认 shadow·advisory）。
+        # D3：读者-角色知识差三态（信息差序列骨·env KNOWLEDGE_GAP_INJECT_MODE 默认 active·
+        # 2026-07-18 G3-ENUMKAPPA PASS·advisory）。
         "knowledge_gap_signature": _collect_knowledge_gap_directives(s),
         # #4：作者签名因果功能链（结构骨·env NARR_FUNC_SEQ_INJECT_MODE 默认 shadow·advisory·中文网文同质化结构层根因）。
         "narrative_function_sequence": _collect_narrative_function_sequence(s),

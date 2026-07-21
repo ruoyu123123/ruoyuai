@@ -179,6 +179,18 @@ def test_P_first_run_idempotent_keeps_digest(tmp_path, monkeypatch):
            [j["prompt_sha256"] for j in second["jobs"]]
 
 
+def test_P_prompt_disk_bytes_match_declared_sha(tmp_path, monkeypatch):
+    """manifest 的 prompt_sha256 必须等于磁盘原始字节哈希（write_bytes 落盘）。
+    回归锁：write_text 在 Windows 把 \\n 翻译成 \\r\\n → 声明哈希对不上磁盘 →
+    judge 无法核验输入完整性 + 幂等补写检查永真（每次重跑都重写 prompt）。"""
+    monkeypatch.delenv("AV_JUDGE_POSITION_SWAP", raising=False)
+    project, replica, output = _make_project(tmp_path)
+    assert _run(project, replica, output) == 2
+    for job in _manifest(output)["jobs"]:
+        disk_sha = hashlib.sha256(Path(job["prompt_path"]).read_bytes()).hexdigest()
+        assert disk_sha == job["prompt_sha256"]
+
+
 # ════════════════════════════════════════════════════════════════
 # [V] 二跑：严格验收 + 多数票聚合 + advisory 报告
 # ════════════════════════════════════════════════════════════════

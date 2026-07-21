@@ -389,6 +389,9 @@ def _normalize_volume_chunk(cand, vol_no: int, known_ids: set | None = None) -> 
         mid = str(m.get("id") or "").strip()
         if not mid:
             return None, "ME 缺 id（合并去重锚·必须有）"
+        if not world_evolution_engine.ME_ID_RE.fullmatch(mid):
+            return None, (f"ME id 非 canonical 格式: {mid!r}——必须是 ME-V<卷>-<序>（如 ME-V{vol_no}-01）。"
+                          f"fate_event 涟漪规则以 ME id 为 trigger，非 canonical id 派生的规则永不点火（死规则）")
         if mid in seen:
             return None, f"chunk 内 ME id 重复: {mid}"
         seen.add(mid)

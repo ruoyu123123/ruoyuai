@@ -100,6 +100,11 @@ ENTITY_STATS_PATH: <确定性实体统计>
 <PROJECT_ROOT>/_数据库/.wal/cluster_<NNN>_archive.json
 ```
 
+`characters[].tier` 只有三档合法值——`core`（主角）/ `emerged`（本 cluster 首次真实登场
+且非一次性的角色）/ `extra`（一次性或纯功能龙套）。任何其它直觉性描述（`support` /
+`minor` / `secondary` 等）`apply_archive.py` 会硬拒退回，导致 cluster-save-state 整条
+链路中断（实战教训：2026-07-17 真机 cluster_001）。
+
 顶层示例：
 
 ```json

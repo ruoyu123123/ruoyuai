@@ -42,6 +42,27 @@ def test_identify_ending_type_fallback_hard_close():
     assert wtc.identify_ending_type(body) == "场景硬收"
 
 
+def test_identify_ending_type_action_void_extended_verbs():
+    """回归锁（2026-07-18 真机 cluster_002 实战撞坑）：动作留白判定的动词白名单
+    只有 放/推/拉/按/举/抬/蹲/站/走/坐/看/闭/睁/握/垂，不含"写/刻/落"这类同语义
+    的收尾动词——导致「一并刻进纸里。」这种动作持续未收束的真实动作留白被误判成
+    场景硬收，writer_truth_check 误报 lie。四轮独立 reading-reflector 都判定这类
+    收尾是合法动作留白，问题出在分类器动词表覆盖不全，不是 writer 撒谎。"""
+    body = "笔尖重新落回本子，接着往下写，一笔一划，写得很慢，像是要把今天这一整天，连同那句还没说出口的警告，一并刻进纸里。"
+    assert wtc.identify_ending_type(body) == "动作留白"
+
+
+def test_identify_ending_type_verb_in_subordinate_clause_not_action_void():
+    """回归锁（2026-07-19 真机 cluster_004 实战撞坑）：动作留白动词表里的字
+    可能出现在句中的从属/比较分句里（如"和他自己走进这栋楼"），而非句子真正的
+    收尾谓语——真正的收尾谓语在后一个逗号分句"是同一批日子"。旧正则允许动词
+    与句末标点之间跨逗号匹配 15 字内任意字符，导致这种嵌入式动词被误判成动作
+    留白。动词与句末标点之间不得跨逗号/分号，才能只抓真正紧邻句末的收束动作。"""
+    body = "撕页发生的那个窗口，逼近得几乎和他自己走进这栋楼，是同一批日子。"
+    assert wtc.identify_ending_type(body) != "动作留白"
+    assert wtc.identify_ending_type(body) == "场景硬收"
+
+
 # ============ 纯函数：行抽取 ============
 
 def test_extract_first_line_skips_blanks():

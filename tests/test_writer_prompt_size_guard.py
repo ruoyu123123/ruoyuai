@@ -2,7 +2,7 @@
 
 钉死 G3 真 API e2e 抓出的卡死根因：211 轮 R7-R29 upgrade 把流程/基建/蒸馏/测试/合规类
 feedback lesson 无差别灌进 writer system prompt，system 从 ~20k 撑到 67127 chars →
-超 elysiver.max_prompt_chars 直接跳过不调用 → cluster-write step 2 writer exit 3。
+超 profile max_prompt_chars（时值 elysiver 渠道·已删）直接跳过不调用 → cluster-write step 2 writer exit 3。
 
 守护点：
   · _collect_feedback_rules() 注入的 system 段只含写作工艺类 feedback（白名单 ∪ writer_relevant）

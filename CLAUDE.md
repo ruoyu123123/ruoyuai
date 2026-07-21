@@ -490,7 +490,7 @@ python core/scripts/distill_replicate.py \
    - **🆕 一段一句末结束符**（非对话段只能有 1 个 。！？……，看到多句立刻拆段。例外：对话段 / 引用文献）
    - 项目级覆盖走 `_数据库/style_scanner_overrides.json`
 
-> **🔴 北极星⑤校准：通用碎句基线 vs 作者基线**：上面第 2/7 条的「短句连发 / 平均段长 15-30 / 单句独行 ≥40%」是**通用爽文兜底基线，不是天花板**。**作者风格档的句长 / 段长 / 单句独行 / 标点基线 = 第一权威**——作者档规定了该维度就以作者档为准，通用基线自动让位。`prose_rhythm_scanner`（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比 · advisory）负责检测句长是否偏离作者基线，补齐段长之外的句长检测。详见 memory `project_wulianzhe_novel_state`。
+> **🔴 北极星⑤校准：通用碎句基线 vs 作者基线**：上面第 2/7 条的「短句连发 / 平均段长 15-30 / 单句独行 ≥40%」是**通用爽文兜底基线，不是天花板**。**作者风格档的句长 / 段长 / 单句独行 / 标点基线 = 第一权威**——作者档规定了该维度就以作者档为准，通用基线自动让位。`prose_rhythm_scanner`（句长 vs 作者基线 + 主语+动作 streak + 主语开头占比 · advisory）负责检测句长是否偏离作者基线，补齐段长之外的句长检测。
 
 详见 memory `feedback_paragraph_length_hard_constraint` / `feedback_one_sentence_per_paragraph`。
 

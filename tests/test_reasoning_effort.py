@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """reasoning_effort 全链路回归网。
 
-elysiver(new-api 中转)忽略 gemini 专有 thinking_level → thinking 暴走；认 OpenAI 标准
+new-api 类中转忽略 gemini 专有 thinking_level → thinking 暴走；认 OpenAI 标准
 reasoning_effort。全链路统一「thinking_level OR reasoning_effort 都算 reasoning·都注入 extra_body」。
 
 覆盖：
@@ -79,7 +79,7 @@ def _profile(**kw):
 
 
 def test_extra_body_reasoning_effort_only():
-    """elysiver 形态：reasoning_effort=low / thinking_level None → 只注 reasoning_effort。"""
+    """new-api 中转形态：reasoning_effort=low / thinking_level None → 只注 reasoning_effort。"""
     assert _extra_body(_profile(reasoning_effort="low")) == {"reasoning_effort": "low"}
 
 
@@ -106,7 +106,7 @@ def _is_reasoning(profile):
 
 
 def test_is_reasoning_via_reasoning_effort():
-    """🔴 关键：elysiver(reasoning_effort)必须被识别为 reasoning（否则出货回灌 strict 维校准失真）。"""
+    """🔴 关键：reasoning_effort-only profile 必须被识别为 reasoning（否则出货回灌 strict 维校准失真）。"""
     assert _is_reasoning(_profile(reasoning_effort="low")) is True
 
 

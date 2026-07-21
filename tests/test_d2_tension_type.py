@@ -129,7 +129,8 @@ def test_analyzer_b7_has_sternberg_fewshot():
 
 
 def test_rhythm_tension_type_directive_env_gated():
-    """D2-4：三向度配比 directive 受 D2_TENSION_TYPE_INJECT_MODE 控（默认 shadow 不加·active 加）。"""
+    """D2-4：三向度配比 directive 受 D2_TENSION_TYPE_INJECT_MODE 控（默认 active 加·shadow 不加·
+    2026-07-18 G3-ENUMKAPPA PASS 后默认由 shadow 切 active）。"""
     import os
     import tempfile
     import build_manifest as bm
@@ -154,13 +155,14 @@ def test_rhythm_tension_type_directive_env_gated():
     os.environ["RHYTHM_INJECT_MODE"] = "active"
     try:
         with tempfile.TemporaryDirectory() as td:
-            os.environ.pop("D2_TENSION_TYPE_INJECT_MODE", None)  # 默认 shadow
+            os.environ.pop("D2_TENSION_TYPE_INJECT_MODE", None)  # 默认 active
             p = bm._collect_author_rhythm_signature(_S(prof, Path(td)))
             assert p is not None
-            assert not any("张力机制配比" in d for d in p["directives"]), "默认 shadow 不应加三向度"
-            os.environ["D2_TENSION_TYPE_INJECT_MODE"] = "active"
+            assert any("张力机制配比" in d and "suspense50%" in d for d in p["directives"]), \
+                "默认 active（G3 PASS 后）应加三向度"
+            os.environ["D2_TENSION_TYPE_INJECT_MODE"] = "shadow"
             p2 = bm._collect_author_rhythm_signature(_S(prof, Path(td)))
-            assert any("张力机制配比" in d and "suspense50%" in d for d in p2["directives"])
+            assert not any("张力机制配比" in d for d in p2["directives"]), "显式 shadow 不应加三向度"
     finally:
         for k, v in bak.items():
             if v is None:

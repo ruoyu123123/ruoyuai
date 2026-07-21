@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
 """Claude 亲笔创作 + gemini 分段润色契约回归锁。
 
-锁四件事：
+锁五件事：
 1. discover_claude_scenes 的 required 前置语义（缺目录/空/过短 → FileNotFoundError·不降级）；
 2. build_prompt 润色尾部契约（等体量指令 + 原文段注入 + 守恒带数字 + 不产 JSON 指令）；
 3. 段级守恒带常量（0.85 / 1.30）；
-4. 公共接口不暴露多稿、场景顺序生成或文本/changes 混合解析符号。
+4. 公共接口不暴露多稿、场景顺序生成或文本/changes 混合解析符号；
+5. CJK 字数守恒重试仍超界 → 整段保留 Claude 亲笔原稿（与引号维度对称·亲笔优先）。
 """
 import json
 import sys
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -122,3 +124,66 @@ def test_zero_gen_symbols_removed():
 def test_clean_polished_body_strips_json_block():
     reply = "正文段落。\n\n```json\n{\"a\": 1}\n```\n"
     assert gw.clean_polished_body(reply) == "正文段落。"
+
+
+# ---------- 5. CJK 字数守恒重试仍超界 → 保留 Claude 原段（回归锁·2026-07-18） ----------
+# 实战撞坑：真机 cluster_003 scene_02 首稿 ratio=1.71（2534→4342 CJK），带指令重试后
+# 仍 ratio=1.71（几乎原地踏步），旧代码「取离守恒中心更近者」不管是否仍超界都收下——
+# 71% 膨胀的注水稿被无条件接受，违反 gen_writer.py 自身文档的「上限 1.30 注水扩写红线」。
+
+_SRC_CJK = "厉鬼掐住秦烬的脖子，指节泛白。" * 20  # 约 300+ CJK，src
+
+
+def _run_polish_pipeline(monkeypatch, replies):
+    """跑单场景 polish_pipeline：build_prompt/call_gen_model 打桩，replies 按序弹出。"""
+    calls = {"n": 0}
+
+    def fake_build_prompt(project_root, cluster_id, ch_start, polish_view=None):
+        assert polish_view is not None
+        return "SYS", "USER", {"snippet_seed_mode": "off", "injected": False}
+
+    def fake_call(loader, system, user, creative=False):
+        idx = min(calls["n"], len(replies) - 1)
+        calls["n"] += 1
+        return replies[idx], types.SimpleNamespace(name="fake", model="fake-model")
+
+    monkeypatch.setattr(gw, "build_prompt", fake_build_prompt)
+    monkeypatch.setattr(gw, "call_gen_model", fake_call)
+    body, _profile, trace = gw.polish_pipeline(
+        None, Path("."), 1, 1, [("scene_00.txt", _SRC_CJK)])
+    return body, trace, calls["n"]
+
+
+def test_cjk_no_violation_no_retry(monkeypatch):
+    """润色稿字数在守恒带内 → 不触发重试。"""
+    body, trace, n_calls = _run_polish_pipeline(monkeypatch, [_SRC_CJK])
+    assert n_calls == 1
+    sc = trace["scenes"][0]
+    assert sc["retried"] is False and sc["cjk_kept_claude"] is False
+    assert trace["cjk_guard"] == {"scenes_triggered": 0, "scenes_retried": 0, "scenes_kept_claude": 0}
+
+
+def test_cjk_violation_retry_recovers(monkeypatch):
+    """首稿超界 → 带字数指令重试 1 次 → 重试稿落回守恒带 → 收重试稿。"""
+    bloated_once = _SRC_CJK * 2       # ratio≈2.0 超界
+    recovered = _SRC_CJK + "多了几句润色补的细节描写用于凑数但仍在带内。"
+    body, trace, n_calls = _run_polish_pipeline(monkeypatch, [bloated_once, recovered])
+    assert n_calls == 2
+    assert body == recovered
+    sc = trace["scenes"][0]
+    assert sc["retried"] is True and sc["cjk_kept_claude"] is False
+    assert trace["cjk_guard"] == {"scenes_triggered": 1, "scenes_retried": 1, "scenes_kept_claude": 0}
+
+
+def test_cjk_violation_retry_still_out_of_band_keeps_claude(monkeypatch):
+    """重试稿仍超界（含 cluster_003 scene_02 实战复现：重试几乎原地踏步）
+    → 整段保留 Claude 亲笔原稿，不收违反等体量红线的注水/压缩稿。"""
+    bloated = _SRC_CJK * 3            # ratio≈3.0，远超 1.30
+    still_bloated = _SRC_CJK * 2 + _SRC_CJK[: int(len(_SRC_CJK) * 0.9)]  # ratio≈2.9，重试仍远超守恒带
+    body, trace, n_calls = _run_polish_pipeline(monkeypatch, [bloated, still_bloated])
+    assert n_calls == 2
+    assert body == _SRC_CJK, "重试仍超界必须回退 Claude 原段，不得收超界稿"
+    sc = trace["scenes"][0]
+    assert sc["cjk_kept_claude"] is True
+    assert sc["ratio"] == 1.0
+    assert trace["cjk_guard"] == {"scenes_triggered": 1, "scenes_retried": 1, "scenes_kept_claude": 1}

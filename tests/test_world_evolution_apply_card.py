@@ -165,7 +165,11 @@ def test_missing_ripple_match_exits_2():
         assert "missing required ripple_match" in out
 
 
-def test_empty_ripple_match_exits_2():
+def test_empty_ripple_match_is_legal_no_op_exits_0():
+    """回归锁（2026-07-18 真机实战撞坑）：novel-outline-planner.md 第531行明确
+    「ripple_match 必须是真实可匹配的标签或空字符串」——空字符串是合法声明"本 cluster
+    不触发涟漪"（如故事节奏刻意把某条规则留到后续 ME 才触发），旧代码硬拒绝空字符串与
+    该 agent 合约矛盾。空值路径不应依赖 世界状态/涟漪规则 文件存在（未调用 apply_minor_event）。"""
     with tempfile.TemporaryDirectory() as d:
         project = _mk_project(Path(d))
         _write_choice(
@@ -179,9 +183,9 @@ def test_empty_ripple_match_exits_2():
             },
         )
         code, out, _ = _run(project)
-        assert code == 2
+        assert code == 0
         assert "quiet bridge" in out
-        assert "ripple_match must be non-empty" in out
+        assert "不触发涟漪" in out
 
 
 def test_world_files_missing_exits_2():

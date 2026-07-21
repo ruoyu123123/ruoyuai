@@ -41,7 +41,7 @@ ENDING_TYPE_PATTERNS = (
     ("拟声硬收", lambda text: bool(re.search(
         r"(咯|啪|嗒|哒|轰|咚|哗|砰|咳)——\s*$", text.strip()))),
     ("动作留白", lambda text: bool(re.search(
-        r"(放|推|拉|按|举|抬|蹲|站|走|坐|看|闭|睁|握|垂)[^\n]{0,15}[。\.]\s*$",
+        r"(放|推|拉|按|举|抬|蹲|站|走|坐|看|闭|睁|握|垂|写|刻|落|摆|搁)[^\n，,；;]{0,15}[。\.]\s*$",
         text.strip()))),
     ("对话悬念", lambda text: text.rstrip().endswith(('"', "”", "」", "？", "?"))),
     ("独立短句", lambda text: 0 < len(extract_last_line(text)) <= 18),

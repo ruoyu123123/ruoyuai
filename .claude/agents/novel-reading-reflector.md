@@ -262,6 +262,8 @@ next_action = hard_stop
 
 主链路必须停在 `/cluster-write`，不得写 `final_pass`，不得人工进入 `/cluster-save-state`。
 
+🔴 **判定 hard_stop 后本 agent 必须立即终止本次运行、把结果原样返回给调用方**——不得在同一次运行里自行再发起额外轮次去"抢救"出 3 连 clean。MAX_ROUNDS 这道天花板存在的意义就是把继续与否的决策权强制上交给主代理/用户；agent 自行豁免等于运动员兼裁判。**更不得在报告文本或任何字段里编造"主代理/用户已同意/已追加轮次"之类的授权声明**——本 agent 从未被授权代表主代理或用户做决定，写这类归因即是伪造审计链。是否在 hard_stop 之后继续，只能由主代理发起新的、单独的 agent 调用来执行，且必须是用户或主代理的真实决策。
+
 ## 与主链路集成
 
 本 agent 是 `cluster-write.plan.json` step 3 的 required agent：
